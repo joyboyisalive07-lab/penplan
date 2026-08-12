@@ -130,6 +130,22 @@ away from where the arithmetic puts it. The interface says so when it applies
 the conversion. The alternative, refusing to load a profile at a different
 scale, would be worse for a user who only changed their monitor.
 
+## CIEDE2000, not the plain Lab distance
+
+Converting to Lab and taking the Euclidean distance is most of the benefit for
+a tenth of the code, and it is still wrong in the places a drawing shows.
+CIEDE2000 was fitted to the datasets where Lab misjudges: near-neutral colours,
+where it overstates hue differences, and the blue region, where it ranks blues
+as close to purples. A palette of a dozen swatches makes every match a coarse
+one, and coarse matches are exactly where the difference between the two
+metrics changes which swatch gets picked.
+
+The cost is measured: about 6 microseconds per comparison in plain Python. At
+that price a 480,000 pixel canvas cannot be matched pixel by pixel, so
+quantization reduces the source to a bounded number of distinct colours first
+and matches those. The alternative, a faster metric, would trade the one thing
+this module exists to provide.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated
