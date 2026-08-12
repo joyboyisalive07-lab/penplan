@@ -55,6 +55,38 @@ tag and attached to the GitHub release, and can be rebuilt locally with one
 PyInstaller command. A 20 MB binary in git history would dwarf the source it
 was built from.
 
+## Absolute mouse coordinates aim at the centre of a pixel
+
+`SendInput` takes absolute coordinates normalised over 0..65535, and the mouse
+driver converts them back to a pixel with a truncating divide. Normalising a
+pixel's leading edge therefore lands one pixel short whenever the rounding goes
+the wrong way, and a systematic one-pixel drift is visible in a drawing.
+`normalize_absolute` adds half a pixel before scaling, which puts the value in
+the middle of the slot that maps back to the intended pixel. The test asserts
+the round trip for every pixel column of four common resolutions, and for a
+virtual desktop whose origin is negative.
+
+`MOUSEEVENTF_MOVE_NOCOALESCE` is set on every move. Without it Windows is free
+to merge consecutive moves, and a merged pair of moves is a straight line
+across a curve the planner intended to draw.
+
+## The process declares itself per-monitor DPI aware
+
+An unaware process is lied to in both directions on a scaled display: cursor
+positions come back in logical pixels and GDI hands out a stretched copy of the
+screen, so a canvas calibrated at 150 per cent would be off by half again on
+every stroke. `enable_dpi_awareness` asks for per-monitor v2 and falls back
+through the two older APIs. The cost is that tkinter then renders unscaled and
+the interface has to apply the scale factor itself, which `ui.py` does.
+
+## The abort hotkey runs on its own thread and fails loudly
+
+`RegisterHotKey` delivers `WM_HOTKEY` to the thread that registered it, and the
+thread sending input is busy, so the hotkey gets a dedicated thread with its own
+message loop. If registration fails, because another application already holds
+the key, `AbortHotkey` raises instead of continuing: a user watching their mouse
+draw with no way to stop it is the worst outcome this tool can produce.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated

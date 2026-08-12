@@ -15,6 +15,7 @@ from penplan.model import (
     PlanReport,
     Point,
     Sacrifice,
+    ScreenRect,
     Stroke,
 )
 
@@ -141,6 +142,27 @@ def test_default_cost_model_is_finite_and_positive() -> None:
         value = getattr(DEFAULT_COST_MODEL, name)
         assert math.isfinite(value)
         assert value > 0
+
+
+def test_screen_rect_edges_are_exclusive() -> None:
+    rect = ScreenRect(left=100, top=50, width=800, height=600)
+    assert rect.right == 900
+    assert rect.bottom == 650
+    assert rect.contains(100, 50)
+    assert rect.contains(899, 649)
+    assert not rect.contains(900, 649)
+    assert not rect.contains(899, 650)
+
+
+def test_screen_rect_accepts_a_negative_origin() -> None:
+    rect = ScreenRect(left=-1920, top=-200, width=3840, height=1280)
+    assert rect.contains(-1920, -200)
+    assert not rect.contains(-1921, -200)
+
+
+def test_screen_rect_rejects_zero_size() -> None:
+    with pytest.raises(ValueError, match="size must be positive"):
+        ScreenRect(left=0, top=0, width=0, height=100)
 
 
 def test_negative_cost_is_rejected() -> None:

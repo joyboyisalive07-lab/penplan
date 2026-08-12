@@ -30,6 +30,42 @@ class Point:
 
 
 @dataclass(frozen=True, slots=True)
+class ScreenRect:
+    """A rectangle in physical screen pixels.
+
+    Screen space is the one place where the origin can be negative: a monitor
+    placed left of or above the primary one has negative virtual-desktop
+    coordinates, and clamping those to zero would send every stroke to the
+    wrong monitor.
+    """
+
+    left: int
+    top: int
+    width: int
+    height: int
+
+    def __post_init__(self) -> None:
+        """Reject degenerate rectangles, which break coordinate normalisation."""
+        if self.width <= 0 or self.height <= 0:
+            msg = f"rectangle size must be positive, got {self.width}x{self.height}"
+            raise ValueError(msg)
+
+    @property
+    def right(self) -> int:
+        """Return the x coordinate one pixel past the right edge."""
+        return self.left + self.width
+
+    @property
+    def bottom(self) -> int:
+        """Return the y coordinate one pixel past the bottom edge."""
+        return self.top + self.height
+
+    def contains(self, x: int, y: int) -> bool:
+        """Return whether a screen pixel lies inside the rectangle."""
+        return self.left <= x < self.right and self.top <= y < self.bottom
+
+
+@dataclass(frozen=True, slots=True)
 class Stroke:
     """A pen-down polyline drawn in one palette colour with one brush size.
 
