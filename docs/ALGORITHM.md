@@ -84,7 +84,42 @@ along a row, and every one of those is a stroke the time budget has to pay for.
 
 ## Region decomposition
 
-To be written in the region phase.
+The quantized raster is split into connected areas of one colour each, held as
+horizontal runs rather than as sets of pixels. A run is already most of a
+stroke, area and bounding box fall out of the runs, and a picture with half a
+million pixels stays a few thousand objects.
+
+Connectivity is four-way, matching the flood fill in every paint program.
+Eight-way connectivity would join two areas across a diagonal touch that a fill
+would not cross, and the fill planner has to be able to trust that a region is
+exactly what one fill click would reach.
+
+The algorithm is one pass of run-length labelling with union-find: each row is
+split into runs, each run gets a label, and runs that overlap a run of the same
+colour in the row above are merged. A shape whose arm rejoins its body several
+rows later comes out as one region, which single-pass labelling without the
+merge step gets wrong.
+
+Two details keep it fast enough to sit in front of a waiting user. Rows are
+split by comparing the row against itself shifted one byte, as a single big
+integer, so the per-pixel comparison happens in C and Python takes one step per
+run instead of one per pixel. And runs live in parallel lists during the merge,
+with `Run` and `Region` objects built only for the regions that survive the
+area threshold.
+
+Measured on a 900x700 raster with ten colours: an image made of shapes, which
+is what this tool is for, decomposes in 59 ms. A worst case of high-frequency
+noise, which quantizes into 190,000 regions, takes 2 seconds. The lever against
+the worst case is the raster size, which the detail slider controls: a plan
+raster is normally a fraction of the canvas resolution, because a mouse cannot
+draw one plan pixel per canvas pixel inside any usable time budget.
+
+Colours listed as ignored produce no regions at all. That is how the canvas
+background costs nothing: it is already on screen.
+
+The minimum area threshold is the first lever the time budget pulls. Regions
+below it are dropped and counted, so the interface can say how many specks were
+sacrificed rather than quietly losing them.
 
 ## Fill verification
 
