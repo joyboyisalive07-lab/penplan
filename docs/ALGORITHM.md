@@ -225,7 +225,82 @@ safety: regions too small to be worth a tool switch.
 
 ## Tour optimization
 
-To be written in the tour phase.
+Drawing order is a travelling-salesman problem with two differences from the
+textbook one.
+
+The first is that switching colour costs a trip to the palette and a click, not
+just the distance between two strokes. That makes it a clustered problem. The
+penalty lives inside the cost function, expressed as the distance the mouse
+could have covered in the same time, so travel and switching are one number. At
+the default cost model a switch is worth about 625 canvas pixels, which is
+roughly a diagonal of the canvas, and that is why finishing a colour before
+moving on is nearly always right.
+
+The second is that a stroke can be drawn either way round. Reversing one costs
+nothing and changes which end the next stroke starts from, so orientation is
+part of what is being optimised. It falls out of 2-opt for free: reversing a
+stretch of the tour reverses the strokes inside it, and because distance is
+symmetric, only the two edges at the ends of the stretch change cost.
+
+### Construction
+
+Nearest neighbour, colour by colour. Both ends of every stroke go into a
+spatial grid, so the nearest end decides which way round the stroke is drawn,
+and the search expands ring by ring until the nearest candidate cannot be
+beaten by a further ring. When a colour is exhausted, the next colour is the
+one whose nearest entry point is closest.
+
+### Improvement
+
+Three passes run in turn until none of them finds anything or the time cap
+expires.
+
+**2-opt** on neighbour lists. Each step keeps a dozen nearby steps, ranked by
+how close either of its ends comes to either of theirs. Ranking by only one end
+costs about a third of the improvement, because a stroke's useful partner is as
+often near the end it finishes at.
+
+**Long edges.** A neighbour list only proposes partners that are close, and for
+a short edge that is where every improvement lives. A long edge is different:
+the move that removes it can pair it with a step anywhere, because the new edge
+only has to beat the long one it replaces. So the worst few dozen edges get a
+full scan. Without this pass the optimiser stalls at 5 per cent on a scattered
+plan where full 2-opt reaches 14; with it, it reaches 12.7 per cent in a third
+of the time.
+
+**Or-opt.** Runs of up to three steps are relocated elsewhere in the tour,
+either way round.
+
+### Measured
+
+Against a full quadratic 2-opt run to convergence, on scattered random strokes:
+
+| strokes | greedy | penplan | full 2-opt |
+| --- | --- | --- | --- |
+| 200 | 19430 | 16955 in 0.26 s | 16754 in 0.64 s |
+| 500 | 27848 | 25186 in 0.86 s | 25117 in 3.50 s |
+
+On real plans, where the greedy construction is already close to right because
+hatch rows and contours arrive in sensible positions, the picture is different.
+Ordering is worth far more than the improvement passes are:
+
+| plan | steps | as planned | after greedy | optimised | saved |
+| --- | --- | --- | --- | --- | --- |
+| shapes | 184 | 19845 | 12293 | 12047 | 39.3% |
+| scattered circles | 1007 | 71071 | 33552 | 32506 | 54.3% |
+| gradient | 48 | 14593 | 12741 | 12532 | 14.1% |
+| shapes, dithered | 1407 | 75430 | 15105 | 14389 | 80.9% |
+
+The improvement passes contribute the last 1.6 to 4.7 per cent of those totals.
+They earn their keep on scattered work, and on a tidy plan the greedy tour was
+already most of the way there.
+
+### Ordering is not free to rearrange
+
+Phases are ordered but never reordered. Every outline is drawn before any fill,
+because that is the canvas state the fills were proved against, and the interior
+strokes come last because they were planned against a canvas that already had
+the fills on it. The optimiser works inside each phase.
 
 ## Cost model and time budget
 

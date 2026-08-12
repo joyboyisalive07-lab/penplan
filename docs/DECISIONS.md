@@ -217,6 +217,26 @@ partly painted. The chaining limit is therefore the brush's own footprint: a
 run the brush covers in full from its centre may be chained, and anything wider
 stays the horizontal stroke it already is.
 
+## The tour reports three costs, not one
+
+Reporting only the improvement over the greedy tour would have understated this
+module by an order of magnitude and flattered it in the wrong place. On real
+plans the greedy construction is already close to right, so the improvement
+passes add a few per cent, while ordering the plan at all saves between 14 and
+81 per cent over drawing it in the order the planner produced. Both numbers are
+true and they answer different questions, so the result carries the cost of the
+arrival order, the greedy tour and the optimised tour, and the documentation
+quotes all three.
+
+## The worst edges get a full search
+
+Neighbour lists are the standard way to keep 2-opt from being quadratic, and on
+this problem they alone stall at 5 per cent where full 2-opt reaches 14. The
+reason is structural: a neighbour list proposes partners that are close, but
+the move that removes a long edge can pair it with a step anywhere, since the
+new edge only has to beat the long one. Giving the worst few dozen edges a full
+scan costs one linear pass and recovers nearly all of the gap.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated

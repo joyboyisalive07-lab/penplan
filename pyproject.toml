@@ -61,8 +61,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests assert, use literal expectations, and are not an importable package.
 # Test doubles implement protocols that are already documented where they are
-# declared, so repeating the documentation on the fake is noise.
-"tests/*" = ["S101", "PLR2004", "INP001", "D100", "D101", "D102", "D103"]
+# declared, so repeating the documentation on the fake is noise. Seeded
+# pseudo-random layouts are how the tour tests get a reproducible problem that
+# nobody hand-placed.
+"tests/*" = ["S101", "PLR2004", "INP001", "D100", "D101", "D102", "D103", "S311"]
 # Tools run from a checkout: they put src on the path before importing, and
 # their output is the point of running them.
 "tools/*" = ["INP001", "E402", "T201"]
