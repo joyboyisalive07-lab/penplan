@@ -48,7 +48,39 @@ rather than calling it once per pixel.
 
 ## Quantization
 
-To be written in the quantization phase.
+The source image is fitted into the plan raster with its aspect ratio intact
+and the margins filled with the canvas background colour, which calibration
+sampled from the blank canvas. Filling the letterbox with the background rather
+than with white means the planner recognises it as already drawn and spends no
+time on it. Transparency is flattened onto the same background.
+
+Matching then happens in two stages, for cost. A CIEDE2000 comparison costs
+about 6 microseconds, so matching every pixel of a 900x700 raster against a
+dozen swatches would take minutes. Instead the raster is reduced to at most 256
+distinct colours by median cut, those 256 are matched once each, and every
+pixel is mapped through a 256-byte table by `bytes.translate`, which runs in C.
+The whole pass takes about half a second on a 900x700 raster, most of it inside
+Pillow's median cut.
+
+### Dithering
+
+A palette of a dozen colours cannot express a gradient, so gradients land as
+bands. Ordered Bayer dithering replaces the bands with a fixed 4x4 pattern that
+alternates between the two nearest palette colours. For each source colour the
+planner already knows both nearest colours and the ratio of their distances;
+the Bayer cell's threshold is compared against that ratio, so a pixel sitting
+a tenth of the way towards the second colour takes it in a tenth of the cells.
+A pixel that is exactly a palette colour has a ratio of zero and is never
+dithered.
+
+The pattern is built into sixteen lookup tables, one per Bayer cell, so
+dithering costs no colour maths at all: a row is four `translate` calls and
+four strided copies.
+
+Dithering is off by default, and the interface says why. Alternating pixels
+destroy the horizontal runs that the stroke planner merges into polylines. On a
+gradient test image, dithering more than doubles the number of colour changes
+along a row, and every one of those is a stroke the time budget has to pay for.
 
 ## Region decomposition
 

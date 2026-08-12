@@ -146,6 +146,11 @@ def test_wizard_reads_palette_colours_with_the_cursor_parked_away() -> None:
     assert surface.clicks == []
 
 
+def test_wizard_records_the_blank_canvas_colour() -> None:
+    surface = FakeSurface(full_script())
+    assert calibrate(request(), surface, silent).background == BACKGROUND
+
+
 def test_wizard_measures_brush_widths_when_asked() -> None:
     surface = FakeSurface(full_script(), paints=BRUSH_PAINTED_WIDTHS)
     result = calibrate(request(measure_brushes=True), surface, silent)

@@ -87,11 +87,17 @@ class BrushControl:
 
 @dataclass(frozen=True, slots=True)
 class Profile:
-    """One calibrated canvas."""
+    """One calibrated canvas.
+
+    ``background`` is the colour of the blank canvas, sampled during
+    calibration. The planner treats any region that already matches it as
+    already drawn, which is usually the largest single saving in a plan.
+    """
 
     name: str
     canvas: ScreenRect
     screen: ScreenRect
+    background: Rgb
     palette: tuple[Swatch, ...]
     brush_tool: Control
     fill_tool: Control
@@ -203,6 +209,7 @@ class Profile:
             "dpi_scale": self.dpi_scale,
             "screen": _rect_to_json(self.screen),
             "canvas": _rect_to_json(self.canvas),
+            "background": list(self.background),
             "palette": [
                 {"x": swatch.x, "y": swatch.y, "color": list(swatch.color)}
                 for swatch in self.palette
@@ -310,6 +317,7 @@ def from_json_dict(data: dict[str, Any]) -> Profile:
             name=str(data["name"]),
             canvas=_rect_from_json(data["canvas"], "canvas"),
             screen=_rect_from_json(data["screen"], "screen"),
+            background=_color_from_json(data["background"]),
             palette=tuple(
                 Swatch(x=int(entry["x"]), y=int(entry["y"]), color=_color_from_json(entry["color"]))
                 for entry in data["palette"]

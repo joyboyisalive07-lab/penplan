@@ -146,6 +146,25 @@ quantization reduces the source to a bounded number of distinct colours first
 and matches those. The alternative, a faster metric, would trade the one thing
 this module exists to provide.
 
+## The profile records the blank canvas colour
+
+Calibration samples the canvas before anything is drawn on it. Everything the
+planner would otherwise draw in that colour is already on screen, so those
+regions are dropped, which is usually the largest single saving in a plan. It
+also gives the letterbox around a differently proportioned image somewhere
+honest to go: filling it with the background costs nothing to draw.
+
+## Ordered dithering picks between the two nearest colours, not by perturbing
+
+The textbook ordered dither adds a threshold offset to the pixel value and
+re-matches. That needs an amplitude constant, and there is no defensible value
+for one when the palette is whatever a site happened to offer. Comparing the
+Bayer threshold against the ratio of the distances to the two nearest palette
+colours needs no such constant, works with any palette, and falls out of the
+matching the planner already does. It treats perceptual distance as linear in
+coverage, which it is not exactly, but the error is far below what a dozen
+swatches can express.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated

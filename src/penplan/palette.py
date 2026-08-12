@@ -202,29 +202,52 @@ class Palette:
             raise ValueError(msg)
         self.colors: Final = tuple(colors)
         self.labs: Final = tuple(srgb_to_lab(color) for color in self.colors)
-        self._matches: dict[Rgb, tuple[int, float]] = {}
+        self._scans: dict[Rgb, tuple[int, float, int, float]] = {}
 
     def __len__(self) -> int:
         """Return the number of colours in the palette."""
         return len(self.colors)
 
-    def match(self, color: Rgb) -> tuple[int, float]:
-        """Return the index of the closest palette colour and its distance."""
-        cached = self._matches.get(color)
+    def _scan(self, color: Rgb) -> tuple[int, float, int, float]:
+        cached = self._scans.get(color)
         if cached is not None:
             return cached
         lab = srgb_to_lab(color)
-        best_index = 0
-        best_distance = math.inf
+        best_index, best_distance = 0, math.inf
+        second_index, second_distance = 0, math.inf
         for index, candidate in enumerate(self.labs):
             distance = ciede2000(lab, candidate)
             if distance < best_distance:
-                best_index = index
-                best_distance = distance
-        result = (best_index, best_distance)
-        self._matches[color] = result
+                second_index, second_distance = best_index, best_distance
+                best_index, best_distance = index, distance
+            elif distance < second_distance:
+                second_index, second_distance = index, distance
+        if second_distance == math.inf:
+            second_index, second_distance = best_index, best_distance
+        result = (best_index, best_distance, second_index, second_distance)
+        self._scans[color] = result
         return result
+
+    def match(self, color: Rgb) -> tuple[int, float]:
+        """Return the index of the closest palette colour and its distance."""
+        best_index, best_distance, _, _ = self._scan(color)
+        return best_index, best_distance
 
     def nearest(self, color: Rgb) -> int:
         """Return the index of the closest palette colour."""
-        return self.match(color)[0]
+        return self._scan(color)[0]
+
+    def match_pair(self, color: Rgb) -> tuple[int, int, float]:
+        """Return the two closest colours and how far the source sits between them.
+
+        The third value runs from 0, meaning the source is exactly the first
+        colour, to 0.5, meaning it sits equally between the two. Ordered
+        dithering uses it as the fraction of pixels that should take the second
+        colour, which treats perceptual distance as if it were linear in
+        coverage. It is not, quite, but the error is far below what a palette of
+        a dozen swatches can express anyway.
+        """
+        best_index, best_distance, second_index, second_distance = self._scan(color)
+        total = best_distance + second_distance
+        ratio = 0.0 if total == 0.0 else best_distance / total
+        return best_index, second_index, ratio

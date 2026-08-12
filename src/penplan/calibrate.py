@@ -324,6 +324,8 @@ def calibrate(
     announce("Reading palette colours")
     surface.park(canvas.left + canvas.width // 2, canvas.top + canvas.height // 2)
     palette = _read_palette(surface, captures["palette"])
+    # Sampled before anything is drawn, so this is the blank canvas.
+    background = read_background(surface, canvas)
     brush_tool = Control(*captures["brush_tool"][0])
     fill_tool = Control(*captures["fill_tool"][0])
     controls = captures["brushes"]
@@ -331,7 +333,6 @@ def calibrate(
     measured = False
     if request.measure_brushes:
         announce("Measuring brush widths, the canvas will need clearing afterwards")
-        background = read_background(surface, canvas)
         raw = measure_brush_widths(
             surface, canvas, brush_tool, _pick_ink(palette, background), controls
         )
@@ -347,6 +348,7 @@ def calibrate(
         name=request.name,
         canvas=canvas,
         screen=request.screen,
+        background=background,
         palette=palette,
         brush_tool=brush_tool,
         fill_tool=fill_tool,

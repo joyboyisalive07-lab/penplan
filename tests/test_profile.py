@@ -35,6 +35,7 @@ def make_profile(**overrides: object) -> Profile:
         "name": "test",
         "canvas": ScreenRect(left=100, top=200, width=800, height=600),
         "screen": ScreenRect(left=0, top=0, width=1920, height=1080),
+        "background": (255, 255, 255),
         "palette": (
             Swatch(x=10, y=20, color=(0, 0, 0)),
             Swatch(x=30, y=20, color=(255, 255, 255)),
