@@ -14,6 +14,7 @@ from penplan.calibrate import (
     ABORT_KEY,
     CAPTURE_KEY,
     NEXT_KEY,
+    PACING_LADDER,
     SCRIPT,
     CalibrationRequest,
     CalibrationStep,
@@ -22,10 +23,12 @@ from penplan.calibrate import (
     canvas_from_corners,
     fallback_brush_widths,
     measure_ink_width,
+    measure_pacing,
+    zigzag,
 )
 from penplan.input_win import AbortedError
 from penplan.model import Rgb, ScreenRect
-from penplan.profile import ProfileError
+from penplan.profile import ProfileError, Swatch
 
 SCREEN = ScreenRect(left=0, top=0, width=1920, height=1080)
 BACKGROUND: Rgb = (255, 255, 255)
@@ -48,12 +51,16 @@ class FakeSurface:
         events: list[tuple[int, tuple[int, int]]],
         *,
         paints: dict[tuple[int, int], int] | None = None,
+        keeps_up: bool = True,
     ) -> None:
+        self._keeps_up = keeps_up
         self._events = list(events)
         self._cursor = (0, 0)
         self._paints = paints or {}
         self._selected_width = 0
         self._bands: list[tuple[int, int, int, int]] = []
+        self._marks: set[tuple[int, int]] = set()
+        self.paces: list[float] = []
         self.clicks: list[tuple[int, int]] = []
         self.parked: tuple[int, int] | None = None
         self.drags: list[list[tuple[int, int]]] = []
@@ -64,6 +71,8 @@ class FakeSurface:
     def pixel(self, x: int, y: int) -> Rgb:
         if (x, y) in SWATCHES:
             return SWATCHES[(x, y)]
+        if (x, y) in self._marks:
+            return INK
         for left, right, row, width in self._bands:
             if left <= x <= right and abs(y - row) <= width // 2:
                 return INK
@@ -77,8 +86,16 @@ class FakeSurface:
         if (x, y) in self._paints:
             self._selected_width = self._paints[(x, y)]
 
-    def drag(self, points: list[tuple[int, int]]) -> None:
+    def drag(self, points: list[tuple[int, int]], seconds_between: float) -> None:
         self.drags.append(list(points))
+        self.paces.append(seconds_between)
+        rows = {point[1] for point in points}
+        if len(rows) > 1:
+            # A zigzag. A canvas that keeps up receives every corner; one that
+            # does not receives the ends and draws straight between them.
+            if self._keeps_up:
+                self._marks.update(points)
+            return
         left = min(point[0] for point in points)
         right = max(point[0] for point in points)
         self._bands.append((left, right, points[0][1], self._selected_width))
@@ -103,10 +120,8 @@ def full_script() -> list[tuple[int, tuple[int, int]]]:
     return events
 
 
-def request(*, measure_brushes: bool = False) -> CalibrationRequest:
-    return CalibrationRequest(
-        name="fake", screen=SCREEN, dpi_scale=1.0, measure_brushes=measure_brushes
-    )
+def request(*, measure: bool = False) -> CalibrationRequest:
+    return CalibrationRequest(name="fake", screen=SCREEN, dpi_scale=1.0, measure_by_drawing=measure)
 
 
 def silent(_message: str) -> None:
@@ -151,17 +166,37 @@ def test_wizard_records_the_blank_canvas_colour() -> None:
     assert calibrate(request(), surface, silent).background == BACKGROUND
 
 
+def test_wizard_measures_the_pace_the_canvas_keeps_up_with() -> None:
+    surface = FakeSurface(full_script(), paints=BRUSH_PAINTED_WIDTHS)
+    result = calibrate(request(measure=True), surface, silent)
+    assert result.pacing.point_seconds == PACING_LADDER[0]
+
+
+def test_a_canvas_that_never_keeps_up_gets_the_slowest_pace() -> None:
+    canvas = ScreenRect(left=400, top=200, width=800, height=600)
+    ink = Swatch(x=20, y=100, color=(0, 0, 0))
+    surface = FakeSurface([], paints={}, keeps_up=False)
+    assert measure_pacing(surface, canvas, ink).point_seconds == PACING_LADDER[-1]
+
+
+def test_the_zigzag_has_corners_a_straight_line_would_miss() -> None:
+    corners = zigzag(100, 200)
+    assert len({y for _, y in corners}) == 2
+    assert len(corners) >= 6
+
+
 def test_wizard_measures_brush_widths_when_asked() -> None:
     surface = FakeSurface(full_script(), paints=BRUSH_PAINTED_WIDTHS)
-    result = calibrate(request(measure_brushes=True), surface, silent)
+    result = calibrate(request(measure=True), surface, silent)
     assert all(brush.measured for brush in result.brushes)
     assert result.brush_widths == (3.0, 9.0, 21.0)
-    assert len(surface.drags) == len(BRUSH_CONTROLS)
+    # One test stroke per brush size, and the zigzag that measures the pace.
+    assert len(surface.drags) == len(BRUSH_CONTROLS) + 1
 
 
 def test_measured_widths_keep_each_control_with_its_own_width() -> None:
     surface = FakeSurface(full_script(), paints=BRUSH_PAINTED_WIDTHS)
-    result = calibrate(request(measure_brushes=True), surface, silent)
+    result = calibrate(request(measure=True), surface, silent)
     positions = {(brush.x, brush.y): brush.width for brush in result.brushes}
     assert positions == {
         control: float(BRUSH_PAINTED_WIDTHS[control]) for control in BRUSH_CONTROLS
@@ -172,7 +207,7 @@ def test_failed_measurement_falls_back_instead_of_inventing_a_width() -> None:
     # No control paints anything, which is what a mis-captured brush control
     # looks like from here.
     surface = FakeSurface(full_script(), paints={})
-    result = calibrate(request(measure_brushes=True), surface, silent)
+    result = calibrate(request(measure=True), surface, silent)
     assert not any(brush.measured for brush in result.brushes)
     assert result.brush_widths == fallback_brush_widths(len(BRUSH_CONTROLS))
 

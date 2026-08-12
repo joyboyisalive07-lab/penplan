@@ -258,6 +258,24 @@ because a long jump can need the canvas to settle, but calibration measures it
 instead of assuming it, and the documentation says which way the measurement
 came out.
 
+## The estimate is the schedule, not a model of it
+
+The first version had an estimator that walked the plan's steps counting costs,
+and an executor that walked the same steps emitting mouse events. They
+disagreed immediately: the executor had to reselect the brush size, which the
+estimator knew nothing about, and it waited between stroke points, which the
+estimator charged as a bare event. Rather than teach the two models to agree,
+there is now one. The schedule of actions is built as pure data, the estimate
+is its duration, and the executor performs it.
+
+## Pacing is measured at calibration, not while drawing
+
+The measurement has to draw something, and the something has to be sharp enough
+that a canvas missing points shows it. Doing that in the middle of a real
+drawing would leave a zigzag in the corner of the picture. Calibration already
+warns that its test strokes will need clearing, so the zigzag goes there and
+the measured delay is stored in the profile.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated

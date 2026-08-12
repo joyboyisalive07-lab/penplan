@@ -22,7 +22,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Final
 
-from penplan.model import CostModel, Point, Rgb, ScreenRect
+from penplan.model import CostModel, Pacing, Point, Rgb, ScreenRect
 
 PROFILE_FORMAT: Final = 1
 """Bumped whenever a stored profile stops being readable by the old loader."""
@@ -104,6 +104,7 @@ class Profile:
     brushes: tuple[BrushControl, ...]
     dpi_scale: float
     cost: CostModel
+    pacing: Pacing
     created: str
 
     def __post_init__(self) -> None:
@@ -229,6 +230,11 @@ class Profile:
                 "seconds_per_color_switch": self.cost.seconds_per_color_switch,
                 "seconds_per_tool_switch": self.cost.seconds_per_tool_switch,
             },
+            "pacing": {
+                "point_seconds": self.pacing.point_seconds,
+                "settle_seconds": self.pacing.settle_seconds,
+                "hold_seconds": self.pacing.hold_seconds,
+            },
         }
 
     def save(self, path: Path) -> None:
@@ -313,6 +319,7 @@ def from_json_dict(data: dict[str, Any]) -> Profile:
     try:
         tools = data["tools"]
         cost = data["cost"]
+        pacing = data["pacing"]
         return Profile(
             name=str(data["name"]),
             canvas=_rect_from_json(data["canvas"], "canvas"),
@@ -340,6 +347,11 @@ def from_json_dict(data: dict[str, Any]) -> Profile:
                 seconds_per_click=float(cost["seconds_per_click"]),
                 seconds_per_color_switch=float(cost["seconds_per_color_switch"]),
                 seconds_per_tool_switch=float(cost["seconds_per_tool_switch"]),
+            ),
+            pacing=Pacing(
+                point_seconds=float(pacing["point_seconds"]),
+                settle_seconds=float(pacing["settle_seconds"]),
+                hold_seconds=float(pacing["hold_seconds"]),
             ),
             created=str(data.get("created", "")),
         )

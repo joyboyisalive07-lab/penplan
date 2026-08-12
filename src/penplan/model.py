@@ -181,6 +181,84 @@ class CostModel:
                 raise ValueError(msg)
 
 
+@dataclass(frozen=True, slots=True)
+class Pacing:
+    """How long the executor waits, so the canvas can keep up.
+
+    A canvas samples the pointer on its own schedule and drops what arrives in
+    between, so a stroke fed faster than it samples is drawn as a straight line
+    between the points that survived. Calibration measures the delay a canvas
+    needs by drawing a zigzag and checking whether its corners arrived.
+    """
+
+    point_seconds: float
+    settle_seconds: float
+    hold_seconds: float
+
+    def __post_init__(self) -> None:
+        """Reject negative waits, which would mean travelling back in time."""
+        for name in self.__slots__:
+            if getattr(self, name) < 0:
+                msg = f"{name} must be non-negative, got {getattr(self, name)}"
+                raise ValueError(msg)
+
+
+DEFAULT_PACING: Final = Pacing(
+    # One frame at 60 Hz between points, which every canvas tested keeps up
+    # with, until calibration measures something better.
+    point_seconds=0.016,
+    # A press sent in the same breath as the move that positioned it is
+    # sometimes attributed to the previous position, and a press and release in
+    # the same millisecond is sometimes dropped entirely.
+    settle_seconds=0.012,
+    hold_seconds=0.020,
+)
+
+
+class ActionKind(Enum):
+    """The four things the executor can do."""
+
+    MOVE = "move"
+    PRESS = "press"
+    RELEASE = "release"
+    WAIT = "wait"
+
+
+@dataclass(frozen=True, slots=True)
+class Action:
+    """One instruction for the executor, in physical screen pixels.
+
+    The schedule of actions is pure data, built without touching the screen.
+    That is what lets the estimate and the execution be the same thing rather
+    than two models that agree until they do not.
+    """
+
+    kind: ActionKind
+    x: int = 0
+    y: int = 0
+    seconds: float = 0.0
+
+    @staticmethod
+    def move(x: int, y: int) -> Action:
+        """Return a move to a screen pixel."""
+        return Action(kind=ActionKind.MOVE, x=x, y=y)
+
+    @staticmethod
+    def press() -> Action:
+        """Return a press of the left button."""
+        return Action(kind=ActionKind.PRESS)
+
+    @staticmethod
+    def release() -> Action:
+        """Return a release of the left button."""
+        return Action(kind=ActionKind.RELEASE)
+
+    @staticmethod
+    def wait(seconds: float) -> Action:
+        """Return a pause."""
+        return Action(kind=ActionKind.WAIT, seconds=seconds)
+
+
 DEFAULT_COST_MODEL: Final = CostModel(
     # Placeholder figures in the range measured on a 60 Hz canvas before the
     # self-timing run replaces them; see docs/ALGORITHM.md for the model.

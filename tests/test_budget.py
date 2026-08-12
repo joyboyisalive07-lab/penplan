@@ -11,12 +11,22 @@ from penplan.budget import (
     LADDER,
     PlanRequest,
     build_plan,
-    estimate_seconds,
     initial_settings,
     plan_within_budget,
     raster_size,
+    schedule,
+    schedule_seconds,
 )
-from penplan.model import CostModel, Degradation, Fill, Point, ScreenRect, Stroke
+from penplan.model import (
+    ActionKind,
+    CostModel,
+    Degradation,
+    Fill,
+    Pacing,
+    Point,
+    ScreenRect,
+    Stroke,
+)
 from penplan.profile import BrushControl, Control, Profile, Swatch
 
 COLORS = (
@@ -36,11 +46,12 @@ COLORS = (
 # the function under test.
 COST = CostModel(
     seconds_per_move=0.01,
-    seconds_per_pixel=0.001,
+    seconds_per_pixel=0.0,
     seconds_per_click=0.1,
     seconds_per_color_switch=0.5,
     seconds_per_tool_switch=0.2,
 )
+PACING = Pacing(point_seconds=0.02, settle_seconds=0.01, hold_seconds=0.01)
 
 
 def make_profile() -> Profile:
@@ -61,6 +72,7 @@ def make_profile() -> Profile:
         ),
         dpi_scale=1.0,
         cost=COST,
+        pacing=PACING,
         created="2026-08-12T00:00:00+00:00",
     )
 
@@ -87,32 +99,68 @@ def request(budget: float, **overrides: object) -> PlanRequest:
     return PlanRequest(**fields)  # type: ignore[arg-type]
 
 
-def test_estimate_counts_events_not_guesses() -> None:
-    steps = [
-        Stroke(color=0, brush=0, points=(Point(0, 0), Point(10, 0), Point(10, 10))),
-        Stroke(color=1, brush=0, points=(Point(10, 10), Point(20, 10))),
+def test_a_schedule_selects_the_tool_the_colour_and_the_brush_first() -> None:
+    steps = [Stroke(color=2, brush=1, points=(Point(0, 0), Point(4, 0)))]
+    actions = schedule(steps, (32, 32), make_profile(), PACING)
+    moves = [action for action in actions if action.kind is ActionKind.MOVE]
+    profile = make_profile()
+    assert (moves[0].x, moves[0].y) == (profile.brush_tool.x, profile.brush_tool.y)
+    assert (moves[1].x, moves[1].y) == (profile.palette[2].x, profile.palette[2].y)
+    assert (moves[2].x, moves[2].y) == (profile.brushes[1].x, profile.brushes[1].y)
+
+
+def test_a_schedule_only_reselects_what_changed() -> None:
+    same = [
+        Stroke(color=2, brush=1, points=(Point(0, 0), Point(4, 0))),
+        Stroke(color=2, brush=1, points=(Point(8, 8), Point(9, 9))),
     ]
-    # First stroke: arrive 0.01, colour switch 0.5, tool switch 0.2, click 0.1,
-    # two further points 0.02, twenty pixels drawn 0.02, which is 0.85.
-    # Second: no travel, arrive 0.01, colour switch 0.5, click 0.1, one further
-    # point 0.01, ten pixels drawn 0.01, which is 0.63.
-    assert estimate_seconds(steps, COST) == pytest.approx(1.48)
+    different = [
+        same[0],
+        Stroke(color=3, brush=1, points=(Point(8, 8), Point(9, 9))),
+    ]
+    assert len(schedule(different, (32, 32), make_profile(), PACING)) > len(
+        schedule(same, (32, 32), make_profile(), PACING)
+    )
 
 
-def test_a_fill_costs_a_click_and_the_tool_switches_around_it() -> None:
-    steps = [
+def test_a_stroke_costs_a_point_at_a_time() -> None:
+    short = [Stroke(color=0, brush=0, points=(Point(0, 0), Point(4, 0)))]
+    long_stroke = [
+        Stroke(color=0, brush=0, points=(Point(0, 0), Point(4, 0), Point(8, 0), Point(12, 0)))
+    ]
+    extra = schedule_seconds(
+        schedule(long_stroke, (32, 32), make_profile(), PACING), COST
+    ) - schedule_seconds(schedule(short, (32, 32), make_profile(), PACING), COST)
+    # Two further points, each a move and a pacing wait.
+    assert extra == pytest.approx(2 * (COST.seconds_per_move + PACING.point_seconds))
+
+
+def test_a_fill_costs_the_tool_switches_around_it() -> None:
+    strokes = [
         Stroke(color=0, brush=0, points=(Point(0, 0), Point(1, 0))),
-        Fill(color=0, seed=Point(5, 5)),
         Stroke(color=0, brush=0, points=(Point(5, 5), Point(6, 5))),
     ]
-    with_fill = estimate_seconds(steps, COST)
-    without_fill = estimate_seconds([steps[0], steps[2]], COST)
-    # The fill itself, plus switching to it and back again.
-    assert with_fill - without_fill > 2 * COST.seconds_per_tool_switch
+    with_fill = [strokes[0], Fill(color=0, seed=Point(5, 5)), strokes[1]]
+    profile = make_profile()
+    added = schedule_seconds(
+        schedule(with_fill, (32, 32), profile, PACING), COST
+    ) - schedule_seconds(schedule(strokes, (32, 32), profile, PACING), COST)
+    # Two strokes alone need the brush tool, the colour, the brush size and one
+    # press each: five. Putting a fill between them adds the switch to the fill
+    # tool, the fill click itself, the switch back, and the brush size that a
+    # tool change is assumed to have lost: nine.
+    clicks = [
+        action
+        for action in schedule(with_fill, (32, 32), profile, PACING)
+        if action.kind is ActionKind.PRESS
+    ]
+    assert len(clicks) == 9
+    assert added > 3 * (COST.seconds_per_click + COST.seconds_per_move)
 
 
 def test_an_empty_plan_takes_no_time() -> None:
-    assert estimate_seconds([], COST) == 0.0
+    assert schedule_seconds([], COST) == 0.0
+    assert schedule([], (32, 32), make_profile(), PACING) == []
 
 
 def test_the_raster_follows_the_detail_setting() -> None:

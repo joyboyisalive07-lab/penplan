@@ -7,7 +7,7 @@ as it is built.
 ```
 image -> quantize -> regions -> fills -> strokes -> tour -> budget -> plan
                                                                        |
-                                                        render (PNG)   +-> execute (SendInput)
+                                                        render (PNG)   +-> schedule -> execute
 ```
 
 Two properties hold across the whole pipeline:
@@ -365,3 +365,42 @@ of that took 1.1 seconds.
 
 A plan that cannot fit even at the bottom of the ladder is returned with its
 estimate and `fits_budget` false. It is never presented as fitting.
+
+## Execution
+
+### One description, not two
+
+A plan becomes a list of actions: move, press, release, wait. The list is built
+without touching the screen, and it is the only description of an execution
+there is. The estimate is the duration of that list, and the executor performs
+that list. There is no second model of what execution will cost that could
+agree with the first until the day it does not.
+
+The schedule reselects a colour, a tool or a brush only when it changes, and
+always for the first step, because nothing is known about what the canvas had
+selected before. A tool change is assumed to lose the brush size, since some
+canvases keep one per tool; that costs one extra click per fill and never draws
+with the wrong brush.
+
+### Pacing
+
+A canvas samples the pointer on its own schedule and draws a straight line
+between whatever it received, so a stroke fed faster than the canvas samples
+arrives as a straight line with its corners missing. Calibration measures the
+pace the canvas needs: it draws a zigzag with corners too sharp to confuse with
+a straight line, checks whether every corner got painted, and if any is missing
+raises the delay and tries again, in a lower band of the canvas. The measured
+delay is stored in the profile.
+
+The measurement runs during calibration rather than during a drawing, because
+the test has to be drawn somewhere, and calibration is already the step that
+warns the canvas will need clearing.
+
+### Abort
+
+The abort key is checked before every single action, so pressing it takes
+effect within one input event rather than at the end of a stroke. The pointer
+is a context manager, so the button comes back up on any exit, including an
+abort or an exception. The tests assert both: that a run aborted mid-stroke
+reports the button as still held at the moment the run ended, and that the last
+thing the pointer did was release it.

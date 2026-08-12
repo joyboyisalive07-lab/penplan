@@ -24,12 +24,14 @@ presented as fitting when it does not.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
 from penplan.fills import plan_fills
 from penplan.model import (
-    CostModel,
+    Action,
+    ActionKind,
     Degradation,
     DrawPlan,
     Fill,
@@ -49,7 +51,7 @@ if TYPE_CHECKING:
 
     from PIL import Image
 
-    from penplan.model import Step
+    from penplan.model import CostModel, Pacing, Step
     from penplan.profile import Profile
     from penplan.quantize import QuantizedImage
 
@@ -65,6 +67,10 @@ DEFAULT_MIN_REGION_AREA: Final = 2
 # How long the tour optimiser may run. Beyond this the user is waiting on a
 # plan rather than saving time in it.
 DEFAULT_TOUR_SECONDS: Final = 1.0
+
+# Guards the division that converts a switching cost into an equivalent
+# distance, for a machine where a move measured as costing nothing per pixel.
+_MIN_PIXEL_SECONDS: Final = 1e-9
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,38 +148,95 @@ def initial_settings(request: PlanRequest) -> Settings:
     )
 
 
-def estimate_seconds(steps: Sequence[Step], cost: CostModel) -> float:
-    """Estimate how long executing these steps will take.
+def _click_at(x: int, y: int, pacing: Pacing) -> list[Action]:
+    """Return the actions that click one control."""
+    return [
+        Action.move(x, y),
+        Action.wait(pacing.settle_seconds),
+        Action.press(),
+        Action.wait(pacing.hold_seconds),
+        Action.release(),
+    ]
 
-    Time goes on events. A stroke costs one event per point plus the press and
-    release; a fill costs a click and the tool switches around it; a colour
-    change costs the trip to the palette. Distance is charged too, because a
-    long jump needs the canvas to settle before the next press, but on
-    synthetic input that term is small and the measured model says how small.
+
+def schedule(
+    steps: Sequence[Step], raster: tuple[int, int], profile: Profile, pacing: Pacing
+) -> list[Action]:
+    """Turn a plan into the exact sequence of things the mouse will do.
+
+    This is the one description of an execution. The estimate is the duration
+    of this schedule, and the executor performs this schedule, so the two
+    cannot drift apart into models that agree until they do not.
+
+    Selections are emitted only when they change, and always for the first
+    step, because nothing is known about what the canvas had selected before.
     """
-    total = 0.0
-    position = None
+    width, height = raster
+    actions: list[Action] = []
     color: int | None = None
+    brush: int | None = None
     filling: bool | None = None
     for step in steps:
-        start = step.points[0] if isinstance(step, Stroke) else step.seed
-        if position is not None:
-            total += position.distance_to(start) * cost.seconds_per_pixel
-        total += cost.seconds_per_move
-        if color != step.color:
-            total += cost.seconds_per_color_switch
-            color = step.color
         is_fill = isinstance(step, Fill)
         if filling is not is_fill:
-            total += cost.seconds_per_tool_switch
+            control = profile.fill_tool if is_fill else profile.brush_tool
+            actions.extend(_click_at(control.x, control.y, pacing))
             filling = is_fill
-        total += cost.seconds_per_click
+            # A tool change loses the brush size on canvases that keep one per
+            # tool, so the next stroke reselects it.
+            brush = None
+        if color != step.color:
+            swatch = profile.palette[step.color]
+            actions.extend(_click_at(swatch.x, swatch.y, pacing))
+            color = step.color
         if isinstance(step, Stroke):
-            total += (len(step.points) - 1) * cost.seconds_per_move
-            total += step.drawn_length() * cost.seconds_per_pixel
-            position = step.points[-1]
+            if brush != step.brush:
+                control = profile.brushes[step.brush]
+                actions.extend(_click_at(control.x, control.y, pacing))
+                brush = step.brush
+            actions.extend(_stroke_actions(step, width, height, profile, pacing))
         else:
-            position = step.seed
+            actions.extend(_click_at(*profile.canvas_to_screen(step.seed, width, height), pacing))
+    return actions
+
+
+def _stroke_actions(
+    stroke: Stroke, width: int, height: int, profile: Profile, pacing: Pacing
+) -> list[Action]:
+    points = [profile.canvas_to_screen(point, width, height) for point in stroke.points]
+    actions = [
+        Action.move(*points[0]),
+        Action.wait(pacing.settle_seconds),
+        Action.press(),
+        Action.wait(pacing.hold_seconds),
+    ]
+    for point in points[1:]:
+        actions.append(Action.move(*point))
+        actions.append(Action.wait(pacing.point_seconds))
+    actions.append(Action.release())
+    return actions
+
+
+def schedule_seconds(actions: Sequence[Action], cost: CostModel) -> float:
+    """Return how long a schedule takes, from the measured cost of its parts.
+
+    Waits are what the executor sleeps. Everything else is the price of getting
+    an event to the system, which on synthetic input barely depends on how far
+    the cursor moves; the per-pixel term is there because calibration measures
+    it rather than assuming it away.
+    """
+    total = 0.0
+    position: tuple[int, int] | None = None
+    for action in actions:
+        if action.kind is ActionKind.WAIT:
+            total += action.seconds
+        elif action.kind is ActionKind.MOVE:
+            total += cost.seconds_per_move
+            if position is not None:
+                total += math.dist(position, (action.x, action.y)) * cost.seconds_per_pixel
+            position = (action.x, action.y)
+        else:
+            total += cost.seconds_per_click / 2.0
     return total
 
 
@@ -238,15 +301,19 @@ def build_plan(request: PlanRequest, settings: Settings) -> tuple[DrawPlan, floa
         tolerance=settings.tolerance,
         lowest_brush=settings.lowest_brush,
     )
-    switch_pixels = profile.cost.seconds_per_color_switch / max(
-        profile.cost.seconds_per_pixel, 1e-9
-    )
+    # The tour works in canvas pixels, so the switching costs are expressed as
+    # the distance the mouse could have covered in the same time.
+    per_pixel = max(profile.cost.seconds_per_pixel, _MIN_PIXEL_SECONDS)
     tour = plan_tour(
         [list(outlines), list(fills), interior],
-        color_switch_cost=switch_pixels,
+        color_switch_cost=profile.cost.seconds_per_color_switch / per_pixel,
+        brush_switch_cost=profile.cost.seconds_per_tool_switch / per_pixel,
         time_limit=request.tour_seconds,
     )
-    estimate = estimate_seconds(tour.steps, profile.cost)
+    estimate = schedule_seconds(
+        schedule(tour.steps, (target.width, target.height), profile, profile.pacing),
+        profile.cost,
+    )
     plan = DrawPlan(
         width=target.width,
         height=target.height,

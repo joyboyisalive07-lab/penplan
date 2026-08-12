@@ -24,9 +24,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Calibrate a drawing canvas")
     parser.add_argument("name", help="profile name, used as the file name")
     parser.add_argument(
-        "--measure-brushes",
+        "--measure",
         action="store_true",
-        help="draw one test stroke per brush size and measure it; this writes on the canvas",
+        help="draw test strokes to measure brush widths and pacing; this writes on the canvas",
     )
     parser.add_argument(
         "--output", type=Path, default=None, help="where to write, defaults to the user profile dir"
@@ -40,7 +40,7 @@ def main() -> int:
             name=arguments.name,
             screen=surface.screen,
             dpi_scale=dpi_scale_at(*cursor_position()),
-            measure_brushes=arguments.measure_brushes,
+            measure_by_drawing=arguments.measure,
         )
         try:
             profile = calibrate(request, surface, print)
@@ -55,10 +55,11 @@ def main() -> int:
     profile.save(path)
     print(f"wrote {path}")
     print(f"canvas {profile.canvas.width}x{profile.canvas.height}, {len(profile.palette)} colours")
-    if arguments.measure_brushes:
+    if arguments.measure:
         measured = "measured" if profile.brushes[0].measured else "estimated, measurement failed"
         widths = ", ".join(f"{width:.1f}" for width in profile.brush_widths)
         print(f"brush widths {widths} ({measured})")
+        print(f"pacing {profile.pacing.point_seconds * 1000:.0f} ms between stroke points")
         print("clear the canvas: the test strokes are still on it")
     return 0
 

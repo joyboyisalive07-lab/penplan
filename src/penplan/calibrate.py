@@ -17,10 +17,9 @@ whole flow can be driven by a fake in the tests.
 
 from __future__ import annotations
 
-import itertools
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol, Self
 
@@ -36,7 +35,7 @@ from penplan.input_win import (
     enable_dpi_awareness,
     virtual_screen,
 )
-from penplan.model import DEFAULT_COST_MODEL, CostModel, Rgb, ScreenRect
+from penplan.model import DEFAULT_COST_MODEL, DEFAULT_PACING, CostModel, Pacing, Rgb, ScreenRect
 from penplan.profile import (
     MIN_CANVAS_SIDE,
     BrushControl,
@@ -95,6 +94,18 @@ _COST_SAMPLE_INSET: Final = 4
 # A measured cost of zero would let the planner believe a drawing is free.
 _MIN_COST_SECONDS: Final = 1e-5
 
+PACING_LADDER: Final = (0.004, 0.008, 0.016, 0.032, 0.064)
+"""Delays between stroke points to try, fastest first."""
+
+# A zigzag with corners this sharp cannot be mistaken for the straight line a
+# canvas draws when it misses the points in between.
+_ZIGZAG_AMPLITUDE: Final = 16
+_ZIGZAG_STEP: Final = 12
+_ZIGZAG_POINTS: Final = 10
+# Each attempt is drawn in its own band, so the last one cannot be read as the
+# next one landing.
+_ZIGZAG_BAND: Final = 40
+
 
 class StepKind(Enum):
     """Whether a calibration step captures one point or a list of them."""
@@ -151,8 +162,8 @@ class CalibrationSurface(Protocol):
         """Click once at a physical screen pixel."""
         ...
 
-    def drag(self, points: Sequence[tuple[int, int]]) -> None:
-        """Draw one pen-down polyline through the given screen pixels."""
+    def drag(self, points: Sequence[tuple[int, int]], seconds_between: float) -> None:
+        """Draw a pen-down polyline through exactly these pixels, at this pace."""
         ...
 
     def wait_key(self) -> int:
@@ -167,7 +178,8 @@ class CalibrationRequest:
     name: str
     screen: ScreenRect
     dpi_scale: float
-    measure_brushes: bool
+    measure_by_drawing: bool
+    """Whether to draw test strokes, which measures brush widths and pacing."""
 
 
 def canvas_from_corners(first: tuple[int, int], second: tuple[int, int]) -> ScreenRect:
@@ -290,7 +302,10 @@ def measure_brush_widths(
         surface.click(brush_tool.x, brush_tool.y)
         surface.click(control[0], control[1])
         surface.click(ink.x, ink.y)
-        surface.drag([(centre_x - half_length, row), (centre_x + half_length, row)])
+        surface.drag(
+            _dense_line((centre_x - half_length, row), (centre_x + half_length, row)),
+            DEFAULT_PACING.point_seconds,
+        )
         span = min(_SCAN_HALF_HEIGHT, canvas.height // (2 * len(controls)) or 1)
         column = [
             surface.pixel(centre_x, y)
@@ -298,6 +313,44 @@ def measure_brush_widths(
         ]
         widths.append(measure_ink_width(column, background))
     return tuple(widths)
+
+
+def zigzag(left: int, top: int) -> list[tuple[int, int]]:
+    """Return the corners of a test zigzag, sharp enough that a miss shows."""
+    return [
+        (left + index * _ZIGZAG_STEP, top + (_ZIGZAG_AMPLITUDE if index % 2 else 0))
+        for index in range(_ZIGZAG_POINTS)
+    ]
+
+
+def measure_pacing(surface: CalibrationSurface, canvas: ScreenRect, ink: Swatch) -> Pacing:
+    """Find the slowest pace the canvas needs, by drawing until it keeps up.
+
+    A canvas samples the pointer on its own schedule and draws a straight line
+    between whatever it received. Feed it a zigzag too fast and the corners
+    never arrive, so the test is simply whether every corner got painted. The
+    delay is raised until they do.
+
+    This writes on the canvas, so it runs only in the opt-in measuring step,
+    and the caller tells the user to clear up afterwards.
+    """
+    background = read_background(surface, canvas)
+    left = canvas.left + canvas.width // 4
+    for attempt, delay in enumerate(PACING_LADDER):
+        top = canvas.top + canvas.height // 4 + attempt * _ZIGZAG_BAND
+        corners = zigzag(left, top)
+        surface.click(ink.x, ink.y)
+        surface.drag(corners, delay)
+        landed = sum(
+            1
+            for x, y in corners
+            if color_distance(surface.pixel(x, y), background) >= _MIN_INK_CONTRAST
+        )
+        if landed == len(corners):
+            return replace(DEFAULT_PACING, point_seconds=delay)
+    # Nothing kept up. The slowest pace is the honest answer, and the plan will
+    # be estimated at that pace rather than at one the canvas cannot follow.
+    return replace(DEFAULT_PACING, point_seconds=PACING_LADDER[-1])
 
 
 def measure_costs(surface: CalibrationSurface, profile: Profile) -> CostModel:
@@ -413,12 +466,13 @@ def calibrate(
     controls = captures["brushes"]
 
     measured = False
-    if request.measure_brushes:
-        announce("Measuring brush widths, the canvas will need clearing afterwards")
-        raw = measure_brush_widths(
-            surface, canvas, brush_tool, _pick_ink(palette, background), controls
-        )
+    pacing = DEFAULT_PACING
+    if request.measure_by_drawing:
+        announce("Measuring the canvas, it will need clearing afterwards")
+        ink = _pick_ink(palette, background)
+        raw = measure_brush_widths(surface, canvas, brush_tool, ink, controls)
         widths, measured = _resolve_widths(raw, len(controls))
+        pacing = measure_pacing(surface, canvas, ink)
     else:
         widths = fallback_brush_widths(len(controls))
 
@@ -437,6 +491,7 @@ def calibrate(
         brushes=brushes,
         dpi_scale=request.dpi_scale,
         cost=DEFAULT_COST_MODEL,
+        pacing=pacing,
         created=timestamp(),
     )
 
@@ -479,17 +534,22 @@ class WindowsSurface:
         """Click once at a physical screen pixel."""
         self._pointer.click(x, y)
 
-    def drag(self, points: Sequence[tuple[int, int]]) -> None:
-        """Draw one pen-down polyline through the given screen pixels."""
+    def drag(self, points: Sequence[tuple[int, int]], seconds_between: float) -> None:
+        """Draw a pen-down polyline through exactly these pixels, at this pace.
+
+        Exactly these: no interpolation. The pacing measurement depends on the
+        canvas receiving the points it was sent and nothing else, so callers
+        that want a dense line build one themselves.
+        """
         if not points:
             return
         with self._pointer:
             self._pointer.move_to(*points[0])
+            time.sleep(_HOVER_SETTLE_SECONDS)
             self._pointer.press()
-            for start, end in itertools.pairwise(points):
-                for x, y in _hops(start, end):
-                    self._pointer.move_to(x, y)
-                    time.sleep(_TEST_STROKE_HOP_SECONDS)
+            for point in points[1:]:
+                self._pointer.move_to(*point)
+                time.sleep(seconds_between)
 
     def wait_key(self) -> int:
         """Block until the user presses one of the wizard's hotkeys."""
@@ -497,6 +557,11 @@ class WindowsSurface:
             key = self._listener.wait(timeout=None)
             if key is not None:
                 return key
+
+
+def _dense_line(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:
+    """Return a segment as short hops, so a canvas that samples cannot miss it."""
+    return [start, *_hops(start, end)]
 
 
 def _hops(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:

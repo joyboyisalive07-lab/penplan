@@ -9,6 +9,7 @@ import pytest
 from penplan.model import Fill, Point, Stroke
 from penplan.tour import (
     Leg,
+    Switching,
     link_cost,
     nearest_neighbour,
     order,
@@ -19,6 +20,7 @@ from penplan.tour import (
 # A colour switch costs about as much as crossing a canvas, which is what makes
 # the problem clustered rather than plain.
 SWITCH = 600.0
+COSTS = Switching(color=SWITCH)
 
 
 def segment(color: int, start: tuple[int, int], end: tuple[int, int]) -> Stroke:
@@ -53,8 +55,8 @@ def test_a_colour_change_costs_the_switch() -> None:
     first = Leg(index=0, step=segment(0, (0, 0), (0, 0)), flipped=False)
     same = Leg(index=1, step=segment(0, (3, 4), (3, 4)), flipped=False)
     other = Leg(index=2, step=segment(1, (3, 4), (3, 4)), flipped=False)
-    assert link_cost(first, same, SWITCH) == pytest.approx(5.0)
-    assert link_cost(first, other, SWITCH) == pytest.approx(5.0 + SWITCH)
+    assert link_cost(first, same, COSTS) == pytest.approx(5.0)
+    assert link_cost(first, other, COSTS) == pytest.approx(5.0 + SWITCH)
 
 
 def test_greedy_finishes_a_colour_before_moving_on() -> None:
@@ -194,12 +196,12 @@ def test_path_cost_adds_up_the_links() -> None:
         segment(0, (20, 0), (30, 0)),
         segment(1, (40, 0), (50, 0)),
     ]
-    assert path_cost(legs_of(steps), SWITCH) == pytest.approx(10.0 + 10.0 + SWITCH)
+    assert path_cost(legs_of(steps), COSTS) == pytest.approx(10.0 + 10.0 + SWITCH)
 
 
 def test_a_single_step_has_no_travel() -> None:
-    assert path_cost(legs_of([segment(0, (0, 0), (9, 9))]), SWITCH) == 0.0
-    assert path_cost([], SWITCH) == 0.0
+    assert path_cost(legs_of([segment(0, (0, 0), (9, 9))]), COSTS) == 0.0
+    assert path_cost([], COSTS) == 0.0
 
 
 def test_ordering_lowers_the_cost_of_a_shuffled_grid() -> None:
@@ -210,6 +212,6 @@ def test_ordering_lowers_the_cost_of_a_shuffled_grid() -> None:
         segment(0, (x * 40, y * 40), (x * 40 + 20, y * 40)) for x in range(8) for y in range(8)
     ]
     random.shuffle(steps)
-    arrival = path_cost(legs_of(steps), SWITCH)
+    arrival = path_cost(legs_of(steps), COSTS)
     result = order(steps, color_switch_cost=SWITCH, time_limit=1.0)
     assert result.length < arrival / 3

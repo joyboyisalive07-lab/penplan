@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from penplan import profile as profile_module
-from penplan.model import DEFAULT_COST_MODEL, Point, ScreenRect
+from penplan.model import DEFAULT_COST_MODEL, DEFAULT_PACING, Point, ScreenRect
 from penplan.profile import (
     PROFILE_FORMAT,
     BrushControl,
@@ -49,6 +49,7 @@ def make_profile(**overrides: object) -> Profile:
         ),
         "dpi_scale": 1.0,
         "cost": DEFAULT_COST_MODEL,
+        "pacing": DEFAULT_PACING,
         "created": "2026-08-12T00:00:00+00:00",
     }
     fields.update(overrides)

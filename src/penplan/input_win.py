@@ -18,12 +18,15 @@ import queue
 import threading
 import time
 from ctypes import wintypes
-from typing import TYPE_CHECKING, Final, Self
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, Protocol, Self
 
-from penplan.model import Rgb, ScreenRect
+from penplan.model import ActionKind, ScreenRect
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
+
+    from penplan.model import Action, Rgb
 
 _user32: Final = ctypes.WinDLL("user32", use_last_error=True)
 _gdi32: Final = ctypes.WinDLL("gdi32", use_last_error=True)
@@ -320,6 +323,30 @@ def _send(events: Sequence[_Input]) -> None:
         raise InputError(msg)
 
 
+class PointerLike(Protocol):
+    """The part of the pointer the executor uses, so a fake can stand in."""
+
+    def move_to(self, x: int, y: int) -> None:
+        """Move the cursor to a physical screen pixel."""
+        ...
+
+    def press(self) -> None:
+        """Press the left button."""
+        ...
+
+    def release(self) -> None:
+        """Release the left button."""
+        ...
+
+    def __enter__(self) -> object:
+        """Start a pointer session."""
+        ...
+
+    def __exit__(self, *exc: object) -> None:
+        """Release the button if the session left it down."""
+        ...
+
+
 class Pointer:
     """The left mouse button, with its state tracked so it can always be released.
 
@@ -488,6 +515,72 @@ class HotkeyListener:
                 key = self._ids.get(message.wParam)
                 if key is not None:
                     self._record(key)
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionResult:
+    """What happened when a schedule was carried out."""
+
+    actions_done: int
+    seconds: float
+    aborted: bool
+
+
+class Executor:
+    """Carries out a schedule of actions, and stops the moment it is told to.
+
+    The abort key is checked before every single action, so pressing it takes
+    effect within one input event rather than at the end of a stroke. The
+    pointer is used as a context manager, so the button comes back up on any
+    exit, including an abort or an exception: the user never gets the mouse
+    back mid-drag.
+
+    ``sleep`` and ``clock`` are injected so the whole executor can be run
+    against a fake pointer with no screen and no real time passing.
+    """
+
+    def __init__(
+        self,
+        pointer: PointerLike,
+        abort: AbortHotkey,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._pointer = pointer
+        self._abort = abort
+        self._sleep = sleep
+        self._clock = clock
+
+    def run(
+        self,
+        actions: Sequence[Action],
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> ExecutionResult:
+        """Perform every action, or stop early if the user aborts."""
+        started = self._clock()
+        done = 0
+        aborted = False
+        with self._pointer:
+            try:
+                for index, action in enumerate(actions):
+                    self._abort.raise_if_triggered()
+                    self._perform(action)
+                    done = index + 1
+                    if on_progress is not None:
+                        on_progress(done, len(actions))
+            except AbortedError:
+                aborted = True
+        return ExecutionResult(actions_done=done, seconds=self._clock() - started, aborted=aborted)
+
+    def _perform(self, action: Action) -> None:
+        if action.kind is ActionKind.MOVE:
+            self._pointer.move_to(action.x, action.y)
+        elif action.kind is ActionKind.PRESS:
+            self._pointer.press()
+        elif action.kind is ActionKind.RELEASE:
+            self._pointer.release()
+        else:
+            self._sleep(action.seconds)
 
 
 class AbortHotkey:

@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from penplan.model import Stroke
+from penplan.model import Fill, Stroke
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Sequence
@@ -74,6 +74,11 @@ class Leg:
     def color(self) -> int:
         """Return the palette index this step draws with."""
         return self.step.color
+
+    @property
+    def brush(self) -> int:
+        """Return the brush index, or -1 for a fill, which uses none."""
+        return -1 if isinstance(self.step, Fill) else self.step.brush
 
     @property
     def start(self) -> Point:
@@ -131,15 +136,29 @@ class TourResult:
         return 1.0 - self.length / self.arrival_length
 
 
-def link_cost(first: Leg, second: Leg, switch: float) -> float:
+@dataclass(frozen=True, slots=True)
+class Switching:
+    """What changing colour or brush costs, as an equivalent travel distance.
+
+    Expressing both as distances is what lets the optimiser trade them against
+    travel and against each other with one number.
+    """
+
+    color: float
+    brush: float = 0.0
+
+
+def link_cost(first: Leg, second: Leg, switch: Switching) -> float:
     """Return the cost of drawing ``second`` immediately after ``first``."""
     cost = first.end.distance_to(second.start)
     if first.color != second.color:
-        cost += switch
+        cost += switch.color
+    if first.brush != second.brush:
+        cost += switch.brush
     return cost
 
 
-def path_cost(legs: Sequence[Leg], switch: float) -> float:
+def path_cost(legs: Sequence[Leg], switch: Switching) -> float:
     """Return the total cost of a tour, travel and colour switches together."""
     return sum(link_cost(legs[index], legs[index + 1], switch) for index in range(len(legs) - 1))
 
@@ -331,7 +350,7 @@ def _two_opt_pass(
     legs: list[Leg],
     position: list[int],
     candidates: Sequence[Sequence[int]],
-    switch: float,
+    switch: Switching,
     deadline: float,
 ) -> bool:
     """Reverse stretches of the tour where that shortens it."""
@@ -363,7 +382,9 @@ def _two_opt_pass(
     return improved
 
 
-def _long_edge_pass(legs: list[Leg], position: list[int], switch: float, deadline: float) -> bool:
+def _long_edge_pass(
+    legs: list[Leg], position: list[int], switch: Switching, deadline: float
+) -> bool:
     """Give the worst edges in the tour a full search for a partner.
 
     A neighbour list only proposes partners that are geometrically close, and
@@ -406,7 +427,7 @@ def _or_opt_pass(
     legs: list[Leg],
     position: list[int],
     candidates: Sequence[Sequence[int]],
-    switch: float,
+    switch: Switching,
     deadline: float,
 ) -> bool:
     """Move short runs of steps elsewhere in the tour, either way round."""
@@ -422,7 +443,7 @@ def _or_opt_pass(
     return improved
 
 
-def _removal_gain(legs: Sequence[Leg], start: int, stop: int, switch: float) -> float:
+def _removal_gain(legs: Sequence[Leg], start: int, stop: int, switch: Switching) -> float:
     before = legs[start - 1] if start > 0 else None
     after = legs[stop + 1] if stop + 1 < len(legs) else None
     gain = 0.0
@@ -439,7 +460,7 @@ def _try_relocate(
     legs: list[Leg],
     position: list[int],
     candidates: Sequence[Sequence[int]],
-    switch: float,
+    switch: Switching,
     segment: tuple[int, int],
 ) -> bool:
     """Try every placement of one run of steps, and take the first that helps."""
@@ -486,7 +507,7 @@ def _relocate(
         position[leg.index] = index
 
 
-def improve(legs: list[Leg], switch: float, deadline: float) -> list[Leg]:
+def improve(legs: list[Leg], switch: Switching, deadline: float) -> list[Leg]:
     """Run 2-opt and Or-opt alternately until they stop helping or time runs out."""
     if len(legs) < _MIN_TOUR_FOR_IMPROVEMENT:
         return legs
@@ -504,19 +525,24 @@ def improve(legs: list[Leg], switch: float, deadline: float) -> list[Leg]:
 
 
 def order(
-    steps: Sequence[Step], *, color_switch_cost: float, time_limit: float = DEFAULT_TIME_LIMIT
+    steps: Sequence[Step],
+    *,
+    color_switch_cost: float,
+    brush_switch_cost: float = 0.0,
+    time_limit: float = DEFAULT_TIME_LIMIT,
 ) -> TourResult:
     """Order one group of steps, greedily and then by improvement."""
+    switch = Switching(color=color_switch_cost, brush=brush_switch_cost)
     arrival = path_cost(
         [Leg(index=index, step=step, flipped=False) for index, step in enumerate(steps)],
-        color_switch_cost,
+        switch,
     )
     legs = nearest_neighbour(steps)
-    greedy = path_cost(legs, color_switch_cost)
-    improved = improve(legs, color_switch_cost, time.monotonic() + time_limit)
+    greedy = path_cost(legs, switch)
+    improved = improve(legs, switch, time.monotonic() + time_limit)
     return TourResult(
         steps=tuple(leg.oriented() for leg in improved),
-        length=path_cost(improved, color_switch_cost),
+        length=path_cost(improved, switch),
         greedy_length=greedy,
         arrival_length=arrival,
     )
@@ -526,6 +552,7 @@ def plan_tour(
     phases: Sequence[Sequence[Step]],
     *,
     color_switch_cost: float,
+    brush_switch_cost: float = 0.0,
     time_limit: float = DEFAULT_TIME_LIMIT,
 ) -> TourResult:
     """Order every phase in turn and join them into one plan.
@@ -544,7 +571,12 @@ def plan_tour(
         if not phase:
             continue
         share = time_limit * len(phase) / total
-        result = order(phase, color_switch_cost=color_switch_cost, time_limit=share)
+        result = order(
+            phase,
+            color_switch_cost=color_switch_cost,
+            brush_switch_cost=brush_switch_cost,
+            time_limit=share,
+        )
         steps.extend(result.steps)
         length += result.length
         greedy += result.greedy_length
