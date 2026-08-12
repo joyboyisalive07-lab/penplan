@@ -172,9 +172,9 @@ def test_rendering_a_plan_draws_strokes_then_fills() -> None:
         report=PlanReport(
             estimated_seconds=1.0,
             budget_seconds=10.0,
-            tour_length=0.0,
-            greedy_tour_length=0.0,
-            arrival_tour_length=0.0,
+            travel=0.0,
+            greedy_travel=0.0,
+            arrival_travel=0.0,
             sacrifices=(),
         ),
     )

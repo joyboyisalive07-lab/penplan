@@ -280,20 +280,27 @@ Against a full quadratic 2-opt run to convergence, on scattered random strokes:
 | 200 | 19430 | 16955 in 0.26 s | 16754 in 0.64 s |
 | 500 | 27848 | 25186 in 0.86 s | 25117 in 3.50 s |
 
-On real plans, where the greedy construction is already close to right because
-hatch rows and contours arrive in sensible positions, the picture is different.
-Ordering is worth far more than the improvement passes are:
+On real plans the picture is different, because the greedy construction is
+already close to right: hatch rows and contours arrive in sensible positions.
+Ordering is worth far more than the improvement passes are. These are canvas
+pixels of mouse travel, with the switching costs set aside:
 
-| plan | steps | as planned | after greedy | optimised | saved |
+| plan | steps | as planned | after greedy | optimised | travel saved |
 | --- | --- | --- | --- | --- | --- |
-| shapes | 184 | 19845 | 12293 | 12047 | 39.3% |
-| scattered circles | 1007 | 71071 | 33552 | 32506 | 54.3% |
-| gradient | 48 | 14593 | 12741 | 12532 | 14.1% |
-| shapes, dithered | 1407 | 75430 | 15105 | 14389 | 80.9% |
+| shapes | 184 | 10470 | 2918 | 2672 | 74.5% |
+| scattered circles | 1007 | 55446 | 19177 | 18141 | 67.3% |
+| gradient | 48 | 3968 | 2116 | 1907 | 51.9% |
+| shapes, dithered | 1407 | 62305 | 6980 | 7933 | 87.3% |
 
-The improvement passes contribute the last 1.6 to 4.7 per cent of those totals.
-They earn their keep on scattered work, and on a tidy plan the greedy tour was
-already most of the way there.
+The dithered row is the interesting one: the optimiser ended up with more
+travel than the greedy tour, and was right to. It minimises cost, not distance,
+and on a plan with fourteen hundred tiny steps it paid a little extra travel to
+avoid colour and brush switches worth 625 and 500 pixels each. In cost terms
+that run improved by 56 per cent.
+
+That is also why the result reports both families of number. A cost moves when
+the measured cost model moves; a distance does not, so a distance is what the
+interface shows.
 
 ### Ordering is not free to rearrange
 

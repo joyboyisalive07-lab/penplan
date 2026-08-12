@@ -108,13 +108,13 @@ def test_ordering_beats_the_order_the_planner_produced() -> None:
         for index in range(150)
     ]
     result = order(steps, color_switch_cost=SWITCH, time_limit=1.0)
-    assert result.length < result.arrival_length
-    assert result.total_improvement > 0.3
+    assert result.travel < result.arrival_travel
+    assert result.travel_improvement > 0.3
 
 
-def test_total_improvement_is_zero_without_a_baseline() -> None:
+def test_travel_improvement_is_zero_without_a_baseline() -> None:
     steps: list[Stroke | Fill] = [segment(0, (0, 0), (1, 1))]
-    assert order(steps, color_switch_cost=SWITCH, time_limit=0.1).total_improvement == 0.0
+    assert order(steps, color_switch_cost=SWITCH, time_limit=0.1).travel_improvement == 0.0
 
 
 def test_long_edges_get_a_partner_the_neighbour_lists_would_miss() -> None:
@@ -141,7 +141,7 @@ def test_improvement_beats_the_greedy_tour() -> None:
         x, y = random.randrange(800), random.randrange(600)
         steps.append(segment(index % 4, (x, y), (x + random.randrange(-20, 20), y + 5)))
     result = order(steps, color_switch_cost=SWITCH, time_limit=1.0)
-    assert result.length < result.greedy_length
+    assert result.cost < result.greedy_cost
     assert result.improvement > 0.02
 
 
@@ -158,7 +158,7 @@ def test_a_deadline_that_has_passed_still_returns_a_tour() -> None:
     ]
     result = order(steps, color_switch_cost=SWITCH, time_limit=0.0)
     assert len(result.steps) == len(steps)
-    assert result.length == pytest.approx(result.greedy_length)
+    assert result.cost == pytest.approx(result.greedy_cost)
 
 
 def test_ordering_is_deterministic() -> None:
@@ -214,4 +214,4 @@ def test_ordering_lowers_the_cost_of_a_shuffled_grid() -> None:
     random.shuffle(steps)
     arrival = path_cost(legs_of(steps), COSTS)
     result = order(steps, color_switch_cost=SWITCH, time_limit=1.0)
-    assert result.length < arrival / 3
+    assert result.cost < arrival / 3

@@ -276,9 +276,9 @@ class PlanReport:
 
     estimated_seconds: float
     budget_seconds: float
-    tour_length: float
-    greedy_tour_length: float
-    arrival_tour_length: float
+    travel: float
+    greedy_travel: float
+    arrival_travel: float
     sacrifices: tuple[Sacrifice, ...]
 
     @property
@@ -289,16 +289,16 @@ class PlanReport:
     @property
     def tour_improvement(self) -> float:
         """Return the fraction of travel the optimiser saved over the greedy tour."""
-        if self.greedy_tour_length <= 0:
+        if self.greedy_travel <= 0:
             return 0.0
-        return 1.0 - self.tour_length / self.greedy_tour_length
+        return 1.0 - self.travel / self.greedy_travel
 
     @property
     def ordering_improvement(self) -> float:
-        """Return the fraction saved against drawing in the order planned."""
-        if self.arrival_tour_length <= 0:
+        """Return the fraction of travel saved against the order planned."""
+        if self.arrival_travel <= 0:
             return 0.0
-        return 1.0 - self.tour_length / self.arrival_tour_length
+        return 1.0 - self.travel / self.arrival_travel
 
 
 @dataclass(frozen=True, slots=True)

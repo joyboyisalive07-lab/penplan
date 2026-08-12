@@ -54,6 +54,13 @@ VK_ESCAPE: Final = 0x1B
 VK_F8: Final = 0x77
 VK_F9: Final = 0x78
 
+WM_DROPFILES: Final = 0x0233
+GWLP_WNDPROC: Final = -4
+_WINDOW_PROC: Final = ctypes.WINFUNCTYPE(
+    ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+)
+_installed_procs: Final[list[object]] = []
+
 CLR_INVALID: Final = 0xFFFFFFFF
 LOGPIXELSX: Final = 88
 MONITOR_DEFAULTTONEAREST: Final = 2
@@ -501,7 +508,8 @@ class HotkeyListener:
         for hotkey_id in hotkey_ids:
             _user32.UnregisterHotKey(None, hotkey_id)
 
-    def _record(self, key: int) -> None:
+    def record(self, key: int) -> None:
+        """Note a press, whether it came from the keyboard or from the program."""
         self._pressed.add(key)
         self._presses.put(key)
 
@@ -514,7 +522,75 @@ class HotkeyListener:
             if message.message == WM_HOTKEY:
                 key = self._ids.get(message.wParam)
                 if key is not None:
-                    self._record(key)
+                    self.record(key)
+
+
+def accept_dropped_files(window: int, on_drop: Callable[[list[str]], None]) -> Callable[[], None]:
+    """Let files be dropped onto a window, and return a function that undoes it.
+
+    Tk has no drag and drop of its own, and the usual answer is a Tcl extension
+    that would be a second runtime dependency. The Windows way is two calls and
+    one message: tell the shell the window accepts files, then watch for
+    ``WM_DROPFILES`` by putting a window procedure in front of Tk's own and
+    passing everything else straight through.
+    """
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.DragAcceptFiles.argtypes = (wintypes.HWND, wintypes.BOOL)
+    shell32.DragQueryFileW.argtypes = (
+        wintypes.HANDLE,
+        wintypes.UINT,
+        wintypes.LPWSTR,
+        wintypes.UINT,
+    )
+    shell32.DragQueryFileW.restype = wintypes.UINT
+    shell32.DragFinish.argtypes = (wintypes.HANDLE,)
+
+    set_long = getattr(_user32, "SetWindowLongPtrW", _user32.SetWindowLongW)
+    set_long.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t)
+    set_long.restype = ctypes.c_ssize_t
+    _user32.CallWindowProcW.argtypes = (
+        ctypes.c_ssize_t,
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    )
+    _user32.CallWindowProcW.restype = ctypes.c_ssize_t
+
+    def handle(hwnd: int, message: int, wparam: int, lparam: int) -> int:
+        if message == WM_DROPFILES:
+            on_drop(_dropped_paths(shell32, wparam))
+            return 0
+        return _user32.CallWindowProcW(previous, hwnd, message, wparam, lparam)
+
+    replacement = _WINDOW_PROC(handle)
+    previous = set_long(window, GWLP_WNDPROC, ctypes.cast(replacement, ctypes.c_void_p).value)
+    if not previous:
+        raise InputError(_last_error("SetWindowLongPtr"))
+    shell32.DragAcceptFiles(window, wintypes.BOOL(1))
+    # The replacement is kept alive by this closure; letting it be collected
+    # while Windows still holds the pointer would crash the process.
+    _installed_procs.append(replacement)
+
+    def undo() -> None:
+        shell32.DragAcceptFiles(window, wintypes.BOOL(0))
+        set_long(window, GWLP_WNDPROC, previous)
+        if replacement in _installed_procs:
+            _installed_procs.remove(replacement)
+
+    return undo
+
+
+def _dropped_paths(shell32: ctypes.WinDLL, drop: int) -> list[str]:
+    count = shell32.DragQueryFileW(drop, 0xFFFFFFFF, None, 0)
+    paths: list[str] = []
+    for index in range(count):
+        length = shell32.DragQueryFileW(drop, index, None, 0) + 1
+        buffer = ctypes.create_unicode_buffer(length)
+        shell32.DragQueryFileW(drop, index, buffer, length)
+        paths.append(buffer.value)
+    shell32.DragFinish(drop)
+    return paths
 
 
 @dataclass(frozen=True, slots=True)
@@ -609,11 +685,24 @@ class AbortHotkey:
         """Forget a previous press, so the same registration can be reused."""
         self._listener.clear()
 
-    def __enter__(self) -> Self:
+    def trigger(self) -> None:
+        """Abort from inside the program, as the window's own Escape does."""
+        self._listener.record(self._virtual_key)
+
+    def start(self) -> None:
         """Register the abort key."""
         self._listener.__enter__()
+
+    def stop(self) -> None:
+        """Unregister the abort key."""
+        self._listener.__exit__()
+
+    def __enter__(self) -> Self:
+        """Register the abort key."""
+        self.start()
         return self
 
     def __exit__(self, *exc: object) -> None:
         """Unregister the abort key."""
-        self._listener.__exit__(*exc)
+        del exc
+        self.stop()

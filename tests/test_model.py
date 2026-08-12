@@ -27,9 +27,9 @@ def make_report(**overrides: object) -> PlanReport:
     fields: dict[str, object] = {
         "estimated_seconds": 10.0,
         "budget_seconds": 60.0,
-        "tour_length": 800.0,
-        "greedy_tour_length": 1000.0,
-        "arrival_tour_length": 2000.0,
+        "travel": 800.0,
+        "greedy_travel": 1000.0,
+        "arrival_travel": 2000.0,
         "sacrifices": (),
     }
     fields.update(overrides)
@@ -120,13 +120,13 @@ def test_plan_rejects_empty_palette() -> None:
 
 
 def test_report_tour_improvement_is_a_fraction() -> None:
-    report = make_report(tour_length=750.0, greedy_tour_length=1000.0)
+    report = make_report(travel=750.0, greedy_travel=1000.0)
     assert report.tour_improvement == pytest.approx(0.25)
     assert report.fits_budget
 
 
 def test_report_improvement_is_zero_without_a_baseline() -> None:
-    assert make_report(greedy_tour_length=0.0).tour_improvement == 0.0
+    assert make_report(greedy_travel=0.0).tour_improvement == 0.0
 
 
 def test_report_knows_when_it_overruns() -> None:

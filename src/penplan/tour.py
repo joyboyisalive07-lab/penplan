@@ -109,31 +109,38 @@ class Leg:
 class TourResult:
     """The ordered plan, and what the ordering was worth.
 
-    Three costs, because they answer different questions. ``arrival_length`` is
-    what the plan would cost drawn in the order the planner produced it, which
-    is what this module is worth in total. ``greedy_length`` is what the
-    nearest-neighbour construction alone achieves, and ``length`` is what the
-    improvement passes made of that.
+    Two families of number, because they answer different questions. The costs
+    are what the optimiser minimised, travel and switching together, and only
+    they can say whether it did its job. The travels are plain canvas pixels,
+    and only they mean anything to a reader, because a cost moves when the
+    measured cost model moves and a distance does not.
+
+    Each family covers the three stages: the order the planner produced, what
+    the greedy construction made of it, and what the improvement passes made of
+    that.
     """
 
     steps: tuple[Step, ...]
-    length: float
-    greedy_length: float
-    arrival_length: float
+    cost: float
+    greedy_cost: float
+    arrival_cost: float
+    travel: float
+    greedy_travel: float
+    arrival_travel: float
 
     @property
     def improvement(self) -> float:
-        """Return the fraction saved by the improvement passes over greedy."""
-        if self.greedy_length <= 0:
+        """Return the fraction of cost the improvement passes saved over greedy."""
+        if self.greedy_cost <= 0:
             return 0.0
-        return 1.0 - self.length / self.greedy_length
+        return 1.0 - self.cost / self.greedy_cost
 
     @property
-    def total_improvement(self) -> float:
-        """Return the fraction saved against drawing in the order planned."""
-        if self.arrival_length <= 0:
+    def travel_improvement(self) -> float:
+        """Return the fraction of travel saved against the order planned."""
+        if self.arrival_travel <= 0:
             return 0.0
-        return 1.0 - self.length / self.arrival_length
+        return 1.0 - self.travel / self.arrival_travel
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +153,10 @@ class Switching:
 
     color: float
     brush: float = 0.0
+
+
+_TRAVEL_ONLY: Final = Switching(color=0.0, brush=0.0)
+"""Measures pure geometry: what the mouse covers with the switching set aside."""
 
 
 def link_cost(first: Leg, second: Leg, switch: Switching) -> float:
@@ -533,18 +544,19 @@ def order(
 ) -> TourResult:
     """Order one group of steps, greedily and then by improvement."""
     switch = Switching(color=color_switch_cost, brush=brush_switch_cost)
-    arrival = path_cost(
-        [Leg(index=index, step=step, flipped=False) for index, step in enumerate(steps)],
-        switch,
-    )
+    as_planned = [Leg(index=index, step=step, flipped=False) for index, step in enumerate(steps)]
     legs = nearest_neighbour(steps)
-    greedy = path_cost(legs, switch)
+    greedy_cost = path_cost(legs, switch)
+    greedy_travel = path_cost(legs, _TRAVEL_ONLY)
     improved = improve(legs, switch, time.monotonic() + time_limit)
     return TourResult(
         steps=tuple(leg.oriented() for leg in improved),
-        length=path_cost(improved, switch),
-        greedy_length=greedy,
-        arrival_length=arrival,
+        cost=path_cost(improved, switch),
+        greedy_cost=greedy_cost,
+        arrival_cost=path_cost(as_planned, switch),
+        travel=path_cost(improved, _TRAVEL_ONLY),
+        greedy_travel=greedy_travel,
+        arrival_travel=path_cost(as_planned, _TRAVEL_ONLY),
     )
 
 
@@ -564,9 +576,7 @@ def plan_tour(
     """
     total = sum(len(phase) for phase in phases) or 1
     steps: list[Step] = []
-    length = 0.0
-    greedy = 0.0
-    arrival = 0.0
+    totals = [0.0] * 6
     for phase in phases:
         if not phase:
             continue
@@ -578,9 +588,24 @@ def plan_tour(
             time_limit=share,
         )
         steps.extend(result.steps)
-        length += result.length
-        greedy += result.greedy_length
-        arrival += result.arrival_length
+        for index, value in enumerate(
+            (
+                result.cost,
+                result.greedy_cost,
+                result.arrival_cost,
+                result.travel,
+                result.greedy_travel,
+                result.arrival_travel,
+            )
+        ):
+            totals[index] += value
+    cost, greedy_cost, arrival_cost, travel, greedy_travel, arrival_travel = totals
     return TourResult(
-        steps=tuple(steps), length=length, greedy_length=greedy, arrival_length=arrival
+        steps=tuple(steps),
+        cost=cost,
+        greedy_cost=greedy_cost,
+        arrival_cost=arrival_cost,
+        travel=travel,
+        greedy_travel=greedy_travel,
+        arrival_travel=arrival_travel,
     )

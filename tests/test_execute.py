@@ -114,7 +114,7 @@ def test_an_abort_stops_within_one_action(stop_after: int) -> None:
 
     def trip(done: int, _total: int) -> None:
         if done == stop_after:
-            hotkey._listener._record(hotkey._virtual_key)  # noqa: SLF001
+            hotkey.trigger()
 
     result = Executor(pointer, hotkey, clock.sleep, clock.time).run(actions, trip)
     assert result.aborted
@@ -133,7 +133,7 @@ def test_an_abort_mid_stroke_releases_the_button() -> None:
 
     def trip(done: int, _total: int) -> None:
         if done == first_press + 1:
-            hotkey._listener._record(hotkey._virtual_key)  # noqa: SLF001
+            hotkey.trigger()
 
     result = Executor(pointer, hotkey, clock.sleep, clock.time).run(actions, trip)
     assert result.aborted
@@ -146,7 +146,7 @@ def test_an_abort_mid_stroke_releases_the_button() -> None:
 
 def test_an_abort_before_the_first_action_draws_nothing() -> None:
     hotkey = quiet_hotkey()
-    hotkey._listener._record(hotkey._virtual_key)  # noqa: SLF001
+    hotkey.trigger()
     pointer = FakePointer()
     clock = FakeClock()
     actions = schedule(two_strokes(), (32, 32), make_profile(), PACING)

@@ -323,9 +323,9 @@ def build_plan(request: PlanRequest, settings: Settings) -> tuple[DrawPlan, floa
         report=PlanReport(
             estimated_seconds=estimate,
             budget_seconds=request.budget_seconds,
-            tour_length=tour.length,
-            greedy_tour_length=tour.greedy_length,
-            arrival_tour_length=tour.arrival_length,
+            travel=tour.travel,
+            greedy_travel=tour.greedy_travel,
+            arrival_travel=tour.arrival_travel,
             sacrifices=(),
         ),
     )
