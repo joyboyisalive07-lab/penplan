@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import functools
+import queue
 import threading
 import time
 from ctypes import wintypes
@@ -47,6 +48,8 @@ WM_QUIT: Final = 0x0012
 WM_HOTKEY: Final = 0x0312
 MOD_NOREPEAT: Final = 0x4000
 VK_ESCAPE: Final = 0x1B
+VK_F8: Final = 0x77
+VK_F9: Final = 0x78
 
 CLR_INVALID: Final = 0xFFFFFFFF
 LOGPIXELSX: Final = 88
@@ -61,8 +64,9 @@ _ABSOLUTE_MAX: Final = _ABSOLUTE_RANGE - 1
 # the driver's truncation cannot land the cursor one pixel short.
 _PIXEL_CENTRE: Final = 0.5
 
-# The single hotkey identifier this process ever registers on its own thread.
-_ABORT_HOTKEY_ID: Final = 1
+# Hotkey identifiers are per-thread and arbitrary; the listener numbers the keys
+# it is given from this value upwards.
+_FIRST_HOTKEY_ID: Final = 1
 # Windows 10 1703 and later; the value is the documented sentinel handle.
 _DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: Final = -4
 _PROCESS_PER_MONITOR_DPI_AWARE: Final = 2
@@ -380,45 +384,55 @@ class Pointer:
         self.release()
 
 
-class AbortHotkey:
-    """A process-wide hotkey that the user can press to stop everything.
+class HotkeyListener:
+    """Process-wide hotkeys, delivered on a dedicated message-loop thread.
 
-    The hotkey is registered on a dedicated thread with its own message loop,
-    because ``RegisterHotKey`` delivers ``WM_HOTKEY`` to the thread that
-    registered it, and the executor's thread is busy sending input. The
-    executor checks :meth:`raise_if_triggered` between events, so an abort
-    takes effect within one input event.
+    ``RegisterHotKey`` posts ``WM_HOTKEY`` to the thread that registered the
+    key, and the threads that care about hotkeys here are busy sending input or
+    running the interface, so the keys get a thread of their own. Presses are
+    recorded twice: as a flag per key, which the executor polls between input
+    events, and in a queue, which the calibration wizard blocks on.
 
-    Registration failure is raised, not swallowed: another application already
-    holding the key would otherwise leave the user with no way out.
+    Registration failure is raised, not swallowed. A user watching the mouse
+    draw with no working abort key is the worst outcome this tool can produce.
     """
 
-    def __init__(self, virtual_key: int = VK_ESCAPE) -> None:
-        self._virtual_key = virtual_key
-        self._triggered = threading.Event()
+    def __init__(self, keys: Sequence[int]) -> None:
+        self._keys = tuple(dict.fromkeys(keys))
+        if not self._keys:
+            msg = "a hotkey listener needs at least one key"
+            raise ValueError(msg)
+        self._ids = {_FIRST_HOTKEY_ID + index: key for index, key in enumerate(self._keys)}
+        self._pressed: set[int] = set()
+        self._presses: queue.Queue[int] = queue.Queue()
         self._registered = threading.Event()
         self._error: str | None = None
         self._thread_id: int | None = None
         self._thread: threading.Thread | None = None
 
-    @property
-    def triggered(self) -> bool:
-        """Return whether the hotkey has been pressed since the last reset."""
-        return self._triggered.is_set()
+    def is_pressed(self, key: int) -> bool:
+        """Return whether a key has been pressed since the last :meth:`clear`."""
+        return key in self._pressed
 
-    def raise_if_triggered(self) -> None:
-        """Raise :class:`AbortedError` if the user has asked to stop."""
-        if self._triggered.is_set():
-            msg = "aborted by the user"
-            raise AbortedError(msg)
+    def wait(self, timeout: float | None = None) -> int | None:
+        """Block for the next press and return its key, or None if it times out."""
+        try:
+            return self._presses.get(timeout=timeout)
+        except queue.Empty:
+            return None
 
-    def reset(self) -> None:
-        """Forget a previous press, so the same registration can be reused."""
-        self._triggered.clear()
+    def clear(self) -> None:
+        """Forget every press recorded so far."""
+        self._pressed.clear()
+        while True:
+            try:
+                self._presses.get_nowait()
+            except queue.Empty:
+                return
 
     def __enter__(self) -> Self:
-        """Register the hotkey and start its message loop."""
-        self._thread = threading.Thread(target=self._run, name="penplan-abort", daemon=True)
+        """Register every key and start the message loop."""
+        self._thread = threading.Thread(target=self._run, name="penplan-hotkeys", daemon=True)
         self._thread.start()
         self._registered.wait()
         if self._error is not None:
@@ -426,7 +440,7 @@ class AbortHotkey:
         return self
 
     def __exit__(self, *_exc: object) -> None:
-        """Stop the message loop and unregister the hotkey."""
+        """Stop the message loop and unregister every key."""
         if self._thread_id is not None:
             _user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
         if self._thread is not None:
@@ -436,17 +450,33 @@ class AbortHotkey:
 
     def _run(self) -> None:
         self._thread_id = _kernel32.GetCurrentThreadId()
-        if not _user32.RegisterHotKey(None, _ABORT_HOTKEY_ID, MOD_NOREPEAT, self._virtual_key):
-            self._error = (
-                f"{_last_error('RegisterHotKey')}; another application is holding the abort key"
-            )
+        registered: list[int] = []
+        for hotkey_id, key in self._ids.items():
+            if not _user32.RegisterHotKey(None, hotkey_id, MOD_NOREPEAT, key):
+                self._error = (
+                    f"{_last_error('RegisterHotKey')}; another application is holding "
+                    f"virtual key {key:#04x}"
+                )
+                break
+            registered.append(hotkey_id)
+        else:
             self._registered.set()
+            try:
+                self._pump()
+            finally:
+                self._unregister(registered)
             return
+        self._unregister(registered)
         self._registered.set()
-        try:
-            self._pump()
-        finally:
-            _user32.UnregisterHotKey(None, _ABORT_HOTKEY_ID)
+
+    @staticmethod
+    def _unregister(hotkey_ids: Sequence[int]) -> None:
+        for hotkey_id in hotkey_ids:
+            _user32.UnregisterHotKey(None, hotkey_id)
+
+    def _record(self, key: int) -> None:
+        self._pressed.add(key)
+        self._presses.put(key)
 
     def _pump(self) -> None:
         message = wintypes.MSG()
@@ -455,4 +485,42 @@ class AbortHotkey:
             if result <= 0:
                 return
             if message.message == WM_HOTKEY:
-                self._triggered.set()
+                key = self._ids.get(message.wParam)
+                if key is not None:
+                    self._record(key)
+
+
+class AbortHotkey:
+    """The one hotkey that must always work: stop, and give the mouse back.
+
+    The executor calls :meth:`raise_if_triggered` between input events, so an
+    abort takes effect within one event.
+    """
+
+    def __init__(self, virtual_key: int = VK_ESCAPE) -> None:
+        self._virtual_key = virtual_key
+        self._listener = HotkeyListener([virtual_key])
+
+    @property
+    def triggered(self) -> bool:
+        """Return whether the abort key has been pressed since the last reset."""
+        return self._listener.is_pressed(self._virtual_key)
+
+    def raise_if_triggered(self) -> None:
+        """Raise :class:`AbortedError` if the user has asked to stop."""
+        if self.triggered:
+            msg = "aborted by the user"
+            raise AbortedError(msg)
+
+    def reset(self) -> None:
+        """Forget a previous press, so the same registration can be reused."""
+        self._listener.clear()
+
+    def __enter__(self) -> Self:
+        """Register the abort key."""
+        self._listener.__enter__()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        """Unregister the abort key."""
+        self._listener.__exit__(*exc)

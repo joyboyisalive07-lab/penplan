@@ -15,8 +15,12 @@ import pytest
 from penplan.input_win import (
     _ABSOLUTE_MAX,
     _ABSOLUTE_RANGE,
+    VK_ESCAPE,
+    VK_F8,
+    VK_F9,
     AbortedError,
     AbortHotkey,
+    HotkeyListener,
     HotkeyUnavailableError,
     _Input,
     _MouseInput,
@@ -93,13 +97,36 @@ def test_abort_hotkey_registers_and_releases() -> None:
 
 
 def test_triggered_hotkey_raises_and_resets() -> None:
-    try:
-        hotkey = AbortHotkey()
-        with hotkey:
-            hotkey._triggered.set()  # noqa: SLF001
-            with pytest.raises(AbortedError, match="aborted by the user"):
-                hotkey.raise_if_triggered()
-            hotkey.reset()
-            hotkey.raise_if_triggered()
-    except HotkeyUnavailableError as error:
-        pytest.skip(f"no interactive window station: {error}")
+    # The press is injected rather than typed: a test that needed a real key
+    # press would need a focused window and a human.
+    listener = HotkeyListener([VK_ESCAPE])
+    listener._record(VK_ESCAPE)  # noqa: SLF001
+    assert listener.is_pressed(VK_ESCAPE)
+    assert listener.wait(timeout=0) == VK_ESCAPE
+    listener.clear()
+    assert not listener.is_pressed(VK_ESCAPE)
+    assert listener.wait(timeout=0) is None
+
+
+def test_abort_hotkey_reports_a_recorded_press() -> None:
+    hotkey = AbortHotkey()
+    hotkey._listener._record(VK_ESCAPE)  # noqa: SLF001
+    assert hotkey.triggered
+    with pytest.raises(AbortedError, match="aborted by the user"):
+        hotkey.raise_if_triggered()
+    hotkey.reset()
+    hotkey.raise_if_triggered()
+
+
+def test_listener_needs_at_least_one_key() -> None:
+    with pytest.raises(ValueError, match="at least one key"):
+        HotkeyListener([])
+
+
+def test_listener_delivers_each_key_once_in_order() -> None:
+    listener = HotkeyListener([VK_ESCAPE, VK_F8, VK_F9])
+    for key in (VK_F8, VK_F8, VK_F9):
+        listener._record(key)  # noqa: SLF001
+    assert [listener.wait(timeout=0) for _ in range(3)] == [VK_F8, VK_F8, VK_F9]
+    assert listener.is_pressed(VK_F8)
+    assert not listener.is_pressed(VK_ESCAPE)

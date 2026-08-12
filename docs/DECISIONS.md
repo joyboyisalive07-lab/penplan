@@ -87,6 +87,49 @@ message loop. If registration fails, because another application already holds
 the key, `AbortHotkey` raises instead of continuing: a user watching their mouse
 draw with no way to stop it is the worst outcome this tool can produce.
 
+## Calibration captures with a hotkey, not with a click
+
+Clicking each target would be the obvious interaction and it is the wrong one.
+A click on the canvas corner leaves a dot on the drawing, and a click on a
+palette swatch or a brush control changes the tool state halfway through
+calibration. The user hovers and presses F8 instead, so capturing is
+observation only. F9 ends a list of unknown length, Escape aborts everywhere.
+
+## Palette colours are read after every position is captured
+
+A swatch under the pointer is usually drawn in a hover state: lighter, ringed,
+or scaled up. Reading its colour at the moment of capture would record the
+hover highlight as the palette colour and poison every quantization decision
+made with the profile. The wizard captures all positions first, parks the
+cursor in the middle of the canvas, waits for the page to drop the highlight,
+and only then reads the swatches.
+
+## Brush widths are measured, and the profile says whether they were
+
+The dry run promises to show what will be drawn, and it cannot keep that
+promise without knowing what a brush actually paints. So calibration can draw
+one test stroke per brush size and measure the painted band, taking its width
+at half the peak contrast, which is the standard way to state the width of an
+anti-aliased line. This writes on the canvas, so it is opt-in, and a user who
+declines gets a plausible progression instead. `BrushControl.measured` records
+which of the two happened, because a rendered preview built on guessed widths
+should not look as trustworthy as one built on measurements.
+
+## A malformed profile raises instead of disappearing
+
+Profiles are JSON on purpose: they are meant to be re-edited by hand. A file
+that is broken by that editing must say so. Skipping it would silently drop the
+user's calibration from the list and leave them wondering where it went.
+
+## Rescaling a profile is an aim, not a substitute for recalibration
+
+`Profile.rescaled` moves every recorded position by the ratio of display
+scales, which is how Windows lays a page out, but a browser reflows text at the
+new size and a canvas sized by the surrounding layout can end up a pixel or two
+away from where the arithmetic puts it. The interface says so when it applies
+the conversion. The alternative, refusing to load a profile at a different
+scale, would be worse for a user who only changed their monitor.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated
