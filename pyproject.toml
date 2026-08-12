@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "penplan"
+dynamic = ["version"]
+description = "Reproduce an image on a browser drawing canvas by planning mouse strokes that fit a time budget"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "joyboyisalive07-lab" }]
+keywords = ["drawing", "automation", "planner", "windows"]
+classifiers = [
+    "Environment :: Win32 (MS Windows)",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Graphics",
+]
+dependencies = ["pillow>=11"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.13", "pyinstaller>=6.10"]
+
+[project.urls]
+Homepage = "https://github.com/joyboyisalive07-lab/penplan"
+
+[tool.setuptools.dynamic]
+version = { attr = "penplan.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+# Wider than the 88 default: planning code carries long descriptive names and
+# nested comprehensions that read worse when wrapped.
+line-length = 100
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",  # trailing-comma rule fights the formatter
+    "ISC001",  # implicit string concat rule fights the formatter
+    "D203",    # mutually exclusive with D211, which is the chosen style
+    "D213",    # mutually exclusive with D212, which is the chosen style
+    "D105",    # dunder docstrings restate the dunder
+    "D107",    # __init__ is documented by its class docstring
+    "TRY003",  # one exception class per message is heavier than the messages warrant
+    "CPY001",  # LICENSE covers the whole tree; per-file headers are noise
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, use literal expectations, and are not an importable package.
+"tests/*" = ["S101", "PLR2004", "INP001", "D100", "D103"]
+"tools/*" = ["INP001"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
