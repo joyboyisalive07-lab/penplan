@@ -123,7 +123,46 @@ sacrificed rather than quietly losing them.
 
 ## Fill verification
 
-To be written in the fill phase.
+A fill is the best trade in the planner: one click instead of thousands of
+pixels. It is also the only step that can destroy a drawing. A fill leaks
+through a one-pixel gap in the outline around it and runs until it meets the
+next painted pixel, which on a blank canvas can be most of the picture.
+
+So no fill is issued on trust. The planner:
+
+1. Paints every outline it intends to draw onto a simulated canvas, using the
+   same rasterizer the preview uses.
+2. Picks a seed: the middle of the region's longest run, then the next longest,
+   up to eight attempts, stopping at the first that is not already covered by
+   the outline. A region whose candidate seeds are all covered is a region its
+   own outline already painted, and it needs no fill.
+3. Floods the simulated canvas from that seed, four-way, exactly as the paint
+   bucket would.
+4. Counts how many flooded pixels fall outside the intended region.
+
+**One pixel outside is a refusal.** There is no tolerance, because a leak is
+never small: it stops only where the next outline happens to be, so the
+difference between a safe fill and a catastrophic one is not a matter of
+degree. A refused fill costs nothing but time. Whatever it would have covered
+is still unpainted on the simulated canvas, and the stroke planner picks it up
+from there without being told.
+
+A fill is also refused when it would paint fewer pixels than
+`MIN_FILL_AREA`, because selecting the fill tool, the colour, and then the
+brush again costs more than the few strokes it would replace.
+
+Accepted fills are painted onto the simulated canvas before the next region is
+considered, so each check sees the canvas the executor will actually face. This
+is what makes the ordering contract real: every outline is drawn before any
+fill, and the fills run in plan order.
+
+The cost of the check is one step per row of the flooded area rather than one
+per pixel. Spans are found with C-level searches over a byte-per-pixel blocked
+mask, and leakage is counted with `bytes.count` over each span.
+
+The test suite builds outlines with deliberate gaps, one pixel wide, on each of
+the four edges, and asserts both halves of the guarantee: the fill is refused,
+and the simulated canvas is left untouched.
 
 ## Brush sizing and stroke generation
 

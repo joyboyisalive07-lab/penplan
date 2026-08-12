@@ -165,6 +165,39 @@ matching the planner already does. It treats perceptual distance as linear in
 coverage, which it is not exactly, but the error is far below what a dozen
 swatches can express.
 
+## The preview and the fill check share one rasterizer
+
+`render.py` exists before the dry run needs it, because the fill planner needs
+it first. If fill verification simulated the outline with its own geometry, a
+preview that looked right and an execution that leaked would be able to
+disagree, and the disagreement would only ever show up on a real canvas. One
+brush, one line walk, one flood fill, used by both.
+
+## A fill leak has no tolerance
+
+Every other threshold in this planner is a trade. This one is not. A fill that
+escapes its outline does not paint a few extra pixels: it runs until it meets
+the next painted thing, which on a mostly blank canvas is most of the drawing,
+and there is no undo in this tool's vocabulary. So the acceptance test is zero
+pixels outside the region, and a fill that cannot pass it becomes strokes.
+
+## Fill seeds come from the longest runs, not a distance transform
+
+The ideal seed is the point furthest from the region's boundary, which needs a
+distance transform over the region. On a canvas-sized region that costs more
+than the fill saves, and it would run for every region in the picture. The
+middle of the longest run is nearly always well inside the shape, the next
+longest runs are there as fallbacks, and the simulation catches a bad seed
+anyway, which is the whole point of simulating.
+
+## Even brush widths render one pixel narrow
+
+A disc centred on a pixel cannot be an even number of pixels across. Rather
+than alternate between rounding up and down, which would make a brush's
+rendered width depend on where the stroke happens to start, an even calibrated
+width renders as the odd width below it. The verifier and the preview call the
+same function, so the dry run stays honest either way.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated

@@ -226,7 +226,7 @@ class DrawPlan:
     width: int
     height: int
     palette: tuple[Rgb, ...]
-    brush_widths: tuple[int, ...]
+    brush_widths: tuple[float, ...]
     steps: tuple[Step, ...]
     report: PlanReport
 
