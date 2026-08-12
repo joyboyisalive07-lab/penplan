@@ -276,6 +276,17 @@ drawing would leave a zigzag in the corner of the picture. Calibration already
 warns that its test strokes will need clearing, so the zigzag goes there and
 the measured delay is stored in the profile.
 
+## The icon is drawn once and exported twice
+
+`tools/make_icon.py` holds the geometry and writes both the SVG and the ICO.
+Rendering the ICO from the SVG would need an SVG renderer, which would be a
+dependency for a build step; describing the shape twice would guarantee the two
+drift apart the first time either is touched.
+
+The mark is a rounded frame with a route across it. The first version was a
+symmetric zigzag, which at sixteen pixels reads as the letter N; a path that
+turns reads as a path.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated

@@ -24,6 +24,9 @@ dependencies = ["pillow>=11"]
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.13", "pyinstaller>=6.10"]
 
+[project.scripts]
+penplan = "penplan.ui:main"
+
 [project.urls]
 Homepage = "https://github.com/joyboyisalive07-lab/penplan"
 
@@ -32,6 +35,9 @@ version = { attr = "penplan.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+penplan = ["penplan.ico", "profiles/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

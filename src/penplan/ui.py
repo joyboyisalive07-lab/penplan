@@ -18,6 +18,7 @@ import sys
 import threading
 import tkinter as tk
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from tkinter import filedialog
 from typing import TYPE_CHECKING, Final
@@ -316,11 +317,21 @@ class App:
         self.fields = _Fields(*(tk.StringVar(value="-") for _ in range(6)))
         self.status = tk.StringVar(value="Choose a profile and an image")
         self.sacrifices = tk.StringVar(value="")
+        self._set_icon()
         self._build_controls()
         self._show_source()
         self._install_drop()
         root.bind("<Escape>", lambda _event: self._abort())
         self._schedule_replan()
+
+    def _set_icon(self) -> None:
+        """Put the drawn icon on the window, if it can be found on disk."""
+        try:
+            with resources.as_file(resources.files("penplan") / "penplan.ico") as path:
+                self.root.iconbitmap(default=str(path))
+        except (OSError, ModuleNotFoundError, tk.TclError):
+            # A missing icon is not worth refusing to start over.
+            pass
 
     def _apply_scaling(self) -> None:
         """Undo what per-monitor awareness costs the interface.
