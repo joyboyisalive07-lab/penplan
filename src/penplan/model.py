@@ -200,6 +200,7 @@ class PlanReport:
     budget_seconds: float
     tour_length: float
     greedy_tour_length: float
+    arrival_tour_length: float
     sacrifices: tuple[Sacrifice, ...]
 
     @property
@@ -213,6 +214,13 @@ class PlanReport:
         if self.greedy_tour_length <= 0:
             return 0.0
         return 1.0 - self.tour_length / self.greedy_tour_length
+
+    @property
+    def ordering_improvement(self) -> float:
+        """Return the fraction saved against drawing in the order planned."""
+        if self.arrival_tour_length <= 0:
+            return 0.0
+        return 1.0 - self.tour_length / self.arrival_tour_length
 
 
 @dataclass(frozen=True, slots=True)

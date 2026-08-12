@@ -36,7 +36,7 @@ from penplan.input_win import (
     enable_dpi_awareness,
     virtual_screen,
 )
-from penplan.model import DEFAULT_COST_MODEL, Rgb, ScreenRect
+from penplan.model import DEFAULT_COST_MODEL, CostModel, Rgb, ScreenRect
 from penplan.profile import (
     MIN_CANVAS_SIDE,
     BrushControl,
@@ -86,6 +86,14 @@ _HOVER_SETTLE_SECONDS: Final = 0.15
 # a single move and paint a dot at each end.
 _TEST_STROKE_HOP_PIXELS: Final = 4
 _TEST_STROKE_HOP_SECONDS: Final = 0.008
+
+# The self-timing run. Enough repetitions to average out a scheduling hiccup,
+# few enough that the whole thing is over in a couple of seconds.
+_COST_SAMPLES: Final = 12
+_COST_SHORT_HOP: Final = 8
+_COST_SAMPLE_INSET: Final = 4
+# A measured cost of zero would let the planner believe a drawing is free.
+_MIN_COST_SECONDS: Final = 1e-5
 
 
 class StepKind(Enum):
@@ -290,6 +298,80 @@ def measure_brush_widths(
         ]
         widths.append(measure_ink_width(column, background))
     return tuple(widths)
+
+
+def measure_costs(surface: CalibrationSurface, profile: Profile) -> CostModel:
+    """Time the primitives a plan is built from, on the machine that will run it.
+
+    The run is deliberately short and deliberately harmless: it moves the
+    cursor over the canvas and clicks palette swatches and tool buttons, which
+    change the selected colour and tool and nothing else. It never presses on
+    the canvas, so nothing is drawn.
+
+    Two move distances are timed rather than one, because the two parts of the
+    cost have to be separated: the fixed price of sending an event, and
+    whatever extra a long jump costs. On synthetic input the second is usually
+    close to nothing, and the estimate should say so rather than assume it.
+    """
+    canvas = profile.canvas
+    near = (canvas.left + canvas.width // 2, canvas.top + canvas.height // 2)
+    far = (canvas.left + _COST_SAMPLE_INSET, canvas.top + _COST_SAMPLE_INSET)
+    short_hop = ((near[0] + _COST_SHORT_HOP, near[1]), near)
+    long_hop = (far, near)
+
+    short_seconds = _time_moves(surface, short_hop)
+    long_seconds = _time_moves(surface, long_hop)
+    short_distance = math.dist(*short_hop)
+    long_distance = math.dist(*long_hop)
+    per_pixel = max(0.0, (long_seconds - short_seconds) / max(1.0, long_distance - short_distance))
+    per_move = max(_MIN_COST_SECONDS, short_seconds - per_pixel * short_distance)
+
+    swatch = profile.palette[0]
+    per_click = max(_MIN_COST_SECONDS, _time_clicks(surface, [(swatch.x, swatch.y)]) - per_move)
+    per_color = max(
+        per_click,
+        _time_clicks(surface, [(other.x, other.y) for other in profile.palette[:2]], park=near),
+    )
+    per_tool = max(
+        per_click,
+        _time_clicks(
+            surface,
+            [
+                (profile.fill_tool.x, profile.fill_tool.y),
+                (profile.brush_tool.x, profile.brush_tool.y),
+            ],
+            park=near,
+        ),
+    )
+    return CostModel(
+        seconds_per_move=per_move,
+        seconds_per_pixel=per_pixel,
+        seconds_per_click=per_click,
+        seconds_per_color_switch=per_color,
+        seconds_per_tool_switch=per_tool,
+    )
+
+
+def _time_moves(surface: CalibrationSurface, points: Sequence[tuple[int, int]]) -> float:
+    start = time.perf_counter()
+    for _ in range(_COST_SAMPLES):
+        for point in points:
+            surface.park(*point)
+    return (time.perf_counter() - start) / (_COST_SAMPLES * len(points))
+
+
+def _time_clicks(
+    surface: CalibrationSurface,
+    points: Sequence[tuple[int, int]],
+    park: tuple[int, int] | None = None,
+) -> float:
+    start = time.perf_counter()
+    for _ in range(_COST_SAMPLES):
+        for point in points:
+            surface.click(*point)
+            if park is not None:
+                surface.park(*park)
+    return (time.perf_counter() - start) / (_COST_SAMPLES * len(points))
 
 
 def _pick_ink(palette: Sequence[Swatch], background: Rgb) -> Swatch:

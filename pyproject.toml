@@ -71,3 +71,9 @@ ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"
+
+[tool.ruff.lint.pylint]
+# One over the default. Several planning functions take three inputs and three
+# keyword-only knobs, which reads better than bundling three booleans and a
+# float into an object that exists only to satisfy a count.
+max-args = 6

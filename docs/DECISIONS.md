@@ -237,6 +237,27 @@ the move that removes a long edge can pair it with a step anywhere, since the
 new edge only has to beat the long one. Giving the worst few dozen edges a full
 scan costs one linear pass and recovers nearly all of the gap.
 
+## A degradation that buys nothing is not applied
+
+The first version of the ladder walked down it rung by rung until the plan
+fitted, and reported every rung it passed. On a plan that needed the last rung,
+that meant telling the user they had lost their thinnest brush, their small
+regions and half their palette, when most of those changes had saved nothing
+measurable. Now each rung is built, measured, and kept only if it actually
+shortened the plan, and the sacrifice says how many seconds it bought. The cost
+is one extra planning pass per rejected rung, which is a tenth of a second.
+
+## Time is spent on events, not on distance
+
+`SendInput` teleports the cursor, so a move costs the same whether it crosses
+ten pixels or a thousand. The consequence runs through the whole planner:
+simplification is the sharpest lever the budget has, the click per stroke is
+the largest single cost in a typical plan, and the tour's saving is large in
+pixels and small in seconds. The cost model keeps a per-pixel term anyway,
+because a long jump can need the canvas to settle, but calibration measures it
+instead of assuming it, and the documentation says which way the measurement
+came out.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated

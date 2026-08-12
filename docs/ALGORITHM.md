@@ -304,4 +304,64 @@ the fills on it. The optimiser works inside each phase.
 
 ## Cost model and time budget
 
-To be written in the budget phase.
+### What costs time
+
+Synthetic input teleports the cursor: a `SendInput` move takes the same time
+whether it crosses ten pixels or a thousand. Time therefore goes on events, not
+on distance. Every polyline point is an event, every press and release is a
+click, every colour change is a trip to the palette, and every switch between
+brush and fill is a tool click.
+
+That is why simplification is the sharpest lever the budget has, and why the
+tour's saving is large in pixels and small in seconds. Both facts are reported
+rather than smoothed over.
+
+The model still carries a per-pixel term, because a long jump can need the
+canvas to settle before the next press. Calibration measures it rather than
+assuming it: the self-timing run times a short hop and a long one, and the
+difference between them separates the fixed cost of an event from whatever
+distance adds. It also times clicks on a palette swatch and on the tool
+buttons, which changes the selected colour and tool and draws nothing.
+
+### The estimate
+
+    for each step:
+        travel from the last position       distance x seconds_per_pixel
+        arriving                            seconds_per_move
+        colour change, if any               seconds_per_color_switch
+        tool change, if any                 seconds_per_tool_switch
+        press and release                   seconds_per_click
+        each further point of a stroke      seconds_per_move
+        the length drawn                    distance x seconds_per_pixel
+
+### The ladder
+
+When a plan overruns, it is degraded one rung at a time, in a stated order:
+
+1. **Drop the smallest regions** at 6, then 16, then 40 pixels. Costs specks.
+2. **Simplify harder**, to 1.8 then 3.0 pixels. Costs outline accuracy, and
+   incidentally costs fills, because a simplified outline that cuts a corner
+   fails the fill check.
+3. **Withhold the thinnest brushes**, one then two. Costs fine detail.
+4. **Cut the palette** to 8, then 6, then 4 colours. Costs colour.
+
+A rung is only kept if it actually shortens the plan. A rung that buys nothing
+is skipped rather than reported, because telling a user they gave up their
+thinnest brush and got nothing back is worse than not trying it.
+
+On a 600x450 drawing of four shapes with a ten-colour palette, at half detail:
+
+| budget | estimate | outcome |
+| --- | --- | --- |
+| 300 s | 20.5 s | fits, nothing sacrificed |
+| 30 s | 20.5 s | fits, nothing sacrificed |
+| 15 s | 9.0 s | fits after four rungs |
+| 4 s | 9.0 s | reported as not fitting |
+
+The four rungs at 15 seconds, with what each one bought: dropping regions under
+6 pixels saved 1.9 s, giving up the thinnest brush saved 2.0 s, cutting the
+palette to 6 colours saved 1.0 s, and cutting it to 4 saved 6.5 s. Planning all
+of that took 1.1 seconds.
+
+A plan that cannot fit even at the bottom of the ladder is returned with its
+estimate and `fits_budget` false. It is never presented as fitting.

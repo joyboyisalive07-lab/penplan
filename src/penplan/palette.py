@@ -237,6 +237,15 @@ class Palette:
         """Return the index of the closest palette colour."""
         return self._scan(color)[0]
 
+    def subset(self, indices: Sequence[int]) -> Palette:
+        """Return a palette of just these colours, in the order given.
+
+        Used when the time budget cuts the palette. The caller keeps the
+        mapping back to the profile's own indices, because the executor clicks
+        swatches by their position on screen.
+        """
+        return Palette([self.colors[index] for index in indices])
+
     def match_pair(self, color: Rgb) -> tuple[int, int, float]:
         """Return the two closest colours and how far the source sits between them.
 

@@ -29,6 +29,7 @@ def make_report(**overrides: object) -> PlanReport:
         "budget_seconds": 60.0,
         "tour_length": 800.0,
         "greedy_tour_length": 1000.0,
+        "arrival_tour_length": 2000.0,
         "sacrifices": (),
     }
     fields.update(overrides)

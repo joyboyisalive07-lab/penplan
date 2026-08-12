@@ -334,19 +334,24 @@ def cover(
     *,
     ignore: Collection[int] = (),
     tolerance: float = 1.0,
+    lowest_brush: int = 0,
 ) -> list[Stroke]:
     """Paint everything the canvas is still missing, thickest brush first.
 
     The canvas is painted as the strokes are chosen, so each pass sees exactly
     what the one before it left behind, and the strokes returned are exactly
     what the executor will draw.
+
+    ``lowest_brush`` withholds the thinnest brushes, which is how the time
+    budget trades detail for speed: a coarser brush covers the same area in
+    fewer strokes and paints over anything finer than itself.
     """
     skipped = frozenset(ignore)
     strokes: list[Stroke] = []
     colors = sorted(set(target.indices) - skipped)
-    for brush in range(len(brush_widths) - 1, -1, -1):
+    for brush in range(len(brush_widths) - 1, lowest_brush - 1, -1):
         width = brush_widths[brush]
-        finest = brush == 0
+        finest = brush == lowest_brush
         for color in colors:
             rows = remaining_rows(target, canvas, color, difference_mask(target, canvas))
             usable = rows if finest else erode(rows, width)

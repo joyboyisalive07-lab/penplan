@@ -174,6 +174,7 @@ def test_rendering_a_plan_draws_strokes_then_fills() -> None:
             budget_seconds=10.0,
             tour_length=0.0,
             greedy_tour_length=0.0,
+            arrival_tour_length=0.0,
             sacrifices=(),
         ),
     )
