@@ -166,7 +166,62 @@ and the simulated canvas is left untouched.
 
 ## Brush sizing and stroke generation
 
-To be written in the stroke phase.
+### Outlines are traced, not scanned
+
+Each region's boundary is followed with Moore-neighbour tracing, walking
+clockwise, and comes back to the pixel it started from. The result is one
+closed polyline per region. Closed is the point: scanning a boundary into
+horizontal pieces leaves diagonal gaps, and every gap is a fill leak.
+
+Holes are not traced. A hole is a region in its own right, with its own
+outline, and that outline is what stops the surrounding fill from running into
+it.
+
+Simplifying an outline can cut a corner and open the shape. That is allowed to
+happen, because the fill check runs afterwards against the rasterized outline
+and refuses any fill the simplification broke. Raising the tolerance therefore
+costs fills, and the planner can spend that trade deliberately.
+
+### Brush size comes from erosion
+
+A brush may be used only where it fits entirely inside the area still to be
+painted. That set is a morphological erosion of the remaining mask by the brush
+disc, computed on intervals rather than pixels: shrink each row by the disc's
+half-width on that row, then intersect the rows the disc spans.
+
+The cascade runs from the thickest brush to the thinnest. Each pass hatches the
+eroded area with horizontal strokes spaced by the brush's own height, paints
+them onto the simulated canvas, and hands whatever is left to the next brush
+down. The thick brush therefore covers the interior in a few passes and the
+thin brush inherits the boundary band, which is exactly the division of labour
+the erosion is for.
+
+The thinnest brush does not erode. There is nothing narrower to fall back on,
+so it covers what remains and accepts that a brush wider than a one-pixel
+detail paints over its neighbours, which is what happens on a real canvas too.
+
+### Points cost time
+
+Every point in a polyline is a mouse event. Two steps reduce them.
+
+Runs no wider than the brush are chained across rows into a single polyline
+through their centres, so a one-pixel diagonal arrives as one stroke instead of
+one click per row. Wider runs stay the horizontal strokes they already are.
+
+Then every polyline, outline and chain alike, is simplified with
+Ramer-Douglas-Peucker at a tolerance the planner controls. The implementation
+is iterative rather than recursive, because a thousand-point contour would
+otherwise be a thousand stack frames deep.
+
+### Measured end to end
+
+A 600x450 drawing of five shapes, quantized to a ten-colour palette, plans in
+0.12 seconds into 5 outlines, 5 fills and 65 interior strokes: 161 points in
+total. The rendered plan differs from the quantized target on 0.24 per cent of
+pixels. The same picture planned at 300x225, where anti-aliasing leaves more
+small regions, gives 33 outlines, 4 fills, 147 interior strokes and 0.02 per
+cent mismatch. The refused fills in that run are refusals of economy, not
+safety: regions too small to be worth a tool switch.
 
 ## Tour optimization
 

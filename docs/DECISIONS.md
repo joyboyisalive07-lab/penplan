@@ -198,6 +198,25 @@ rendered width depend on where the stroke happens to start, an even calibrated
 width renders as the odd width below it. The verifier and the preview call the
 same function, so the dry run stays honest either way.
 
+## The stroke cascade paints its own simulation as it goes
+
+Each brush pass asks the simulated canvas what is still missing, rather than
+computing in advance what each brush ought to cover. It costs a buffer compare
+per pass, which is a big-integer XOR and therefore nearly free, and it buys
+exactness: whatever the previous pass actually painted, including everything it
+overshot, is what the next pass sees. The strokes that come out are the strokes
+the executor will draw, with no separate model of coverage that could drift
+from the renderer.
+
+## Chained runs are limited by the brush, not by a constant
+
+Merging one-pixel runs across rows into a polyline is the difference between
+one stroke and one click per row for a diagonal line. But the polyline passes
+through the centre of each run, so a run wider than the brush would be only
+partly painted. The chaining limit is therefore the brush's own footprint: a
+run the brush covers in full from its centre may be chained, and anything wider
+stays the horizontal stroke it already is.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated
