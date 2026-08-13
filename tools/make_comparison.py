@@ -59,13 +59,9 @@ def main() -> int:
         for panel in panels
     ]
     height = max(panel.height for panel in scaled)
-    sheet = Image.new(
-        "RGB", (PANEL * 2 + GAP * 3, height + LABEL_HEIGHT + GAP * 2), BACKGROUND
-    )
+    sheet = Image.new("RGB", (PANEL * 2 + GAP * 3, height + LABEL_HEIGHT + GAP * 2), BACKGROUND)
     draw = ImageDraw.Draw(sheet)
-    for index, (panel, caption) in enumerate(
-        zip(scaled, ("SOURCE", "DRY RUN"), strict=True)
-    ):
+    for index, (panel, caption) in enumerate(zip(scaled, ("SOURCE", "DRY RUN"), strict=True)):
         x = GAP + index * (PANEL + GAP)
         draw.text((x, GAP - 6), caption, fill=LABEL)
         sheet.paste(panel, (x, GAP + LABEL_HEIGHT))
