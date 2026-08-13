@@ -92,6 +92,9 @@ MAX_CHOSEN_COLORS: Final = 24
 
 CALIBRATE_KEYS: Final = "F8 captures what the cursor is on, F9 finishes a list, Escape aborts"
 
+# Shown in place of a profile name when there are none to choose from.
+NO_PROFILES: Final = "no profiles found"
+
 COUNTDOWN_SECONDS: Final = 3
 # Long enough for this window to actually be gone before the screen is read.
 STEP_ASIDE_MS: Final = 450
@@ -547,7 +550,7 @@ class App:
         tk.Label(row, text="penplan", bg=PANEL, fg=TEXT, font=TITLE).pack(side="left")
 
         self._label("PROFILE")
-        names = list(self.profiles) or ["no profiles found"]
+        names = list(self.profiles) or [NO_PROFILES]
         self.profile_name = tk.StringVar(value=names[0])
         menu = tk.OptionMenu(
             parent, self.profile_name, *names, command=lambda _value: self._schedule_replan()
@@ -572,6 +575,11 @@ class App:
             activeforeground=BACKGROUND,
             font=BODY,
             borderwidth=0,
+            # Re-read the directory every time the list is opened. A profile
+            # written by the command-line wizard, or copied in from another
+            # machine, otherwise stays invisible until the window is restarted,
+            # which looks exactly like a calibration that never saved.
+            postcommand=self._refresh_profiles,
         )
         menu.pack(fill="x", padx=PAD, pady=(4, 0))
 
@@ -1000,7 +1008,7 @@ class App:
     def _rebuild_profile_menu(self, chosen: str) -> None:
         menu = self.profile_menu["menu"]
         menu.delete(0, "end")
-        for name in self.profiles or ["no profiles found"]:
+        for name in self.profiles or [NO_PROFILES]:
             menu.add_command(label=name, command=lambda value=name: self._choose_profile(value))
         self.profile_name.set(chosen)
 
@@ -1033,10 +1041,21 @@ class App:
             self.status.set(f"Could not delete {path.name}: {error}")
             return
         self.profiles, self.profile_problem = _load_profiles()
-        remaining = next(iter(self.profiles), "no profiles found")
+        remaining = next(iter(self.profiles), NO_PROFILES)
         self._rebuild_profile_menu(remaining)
         self.status.set(f"Deleted {name}")
         self._schedule_replan()
+
+    def _refresh_profiles(self) -> None:
+        """Re-read the profile directory, keeping the selection if it survived."""
+        self.profiles, self.profile_problem = _load_profiles()
+        if self.profile_problem:
+            self.sacrifices.set(self.profile_problem)
+        previous = self.profile_name.get()
+        chosen = previous if previous in self.profiles else next(iter(self.profiles), NO_PROFILES)
+        self._rebuild_profile_menu(chosen)
+        if chosen != previous:
+            self._schedule_replan()
 
     def _choose_profile(self, name: str) -> None:
         self.profile_name.set(name)
