@@ -76,6 +76,9 @@ GAP: Final = 18
 PAD: Final = 14
 CONTROL_WIDTH: Final = 330
 PREVIEW_SIDE: Final = 380
+# Wide enough for the word and no wider: the calibrate button beside it is the
+# one people came for.
+DELETE_WIDTH: Final = 72
 # Tall enough that every number and the button fit without scrolling, and
 # small enough to sit beside a browser rather than on top of it.
 WINDOW_WIDTH: Final = 1180
@@ -246,10 +249,15 @@ class PrimaryButton(tk.Canvas):
 class SecondaryButton(tk.Canvas):
     """An outlined button, for the things that are not the main thing."""
 
-    def __init__(self, parent: tk.Misc, *, text: str, command: Callable[[], None]) -> None:
-        super().__init__(
-            parent, width=CONTROL_WIDTH - 2 * PAD, height=34, bg=PANEL, highlightthickness=0
-        )
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        text: str,
+        command: Callable[[], None],
+        width: int = CONTROL_WIDTH - 2 * PAD,
+    ) -> None:
+        super().__init__(parent, width=width, height=34, bg=PANEL, highlightthickness=0)
         self._text = text
         self._command = command
         self.bind("<Button-1>", lambda _event: self._command())
@@ -355,6 +363,36 @@ def _as_photo(image: Image.Image) -> tk.PhotoImage:
     return tk.PhotoImage(data=base64.b64encode(buffer.getvalue()))
 
 
+class ConfirmDialog(tk.Toplevel):
+    """Asks once before something that cannot be undone."""
+
+    def __init__(self, parent: tk.Misc, *, question: str, detail: str, confirm: str) -> None:
+        super().__init__(parent)
+        self.title("penplan")
+        self.configure(bg=PANEL)
+        self.resizable(width=False, height=False)
+        self.transient(parent)
+        self.confirmed = False
+
+        tk.Label(
+            self, text=question, bg=PANEL, fg=TEXT, font=BODY, wraplength=320, justify="left"
+        ).pack(fill="x", padx=PAD, pady=(PAD, 4))
+        tk.Label(
+            self, text=detail, bg=PANEL, fg=MUTED, font=SMALL, wraplength=320, justify="left"
+        ).pack(fill="x", padx=PAD)
+        PrimaryButton(self, text=confirm, command=self._confirm).pack(
+            fill="x", padx=PAD, pady=(PAD, 6)
+        )
+        SecondaryButton(self, text="Cancel", command=self.destroy).pack(
+            fill="x", padx=PAD, pady=(0, PAD)
+        )
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _confirm(self) -> None:
+        self.confirmed = True
+        self.destroy()
+
+
 class CalibrateDialog(tk.Toplevel):
     """Asks the three things the wizard needs before it takes over the screen."""
 
@@ -383,6 +421,11 @@ class CalibrateDialog(tk.Toplevel):
         self._name.insert(0, "my-canvas")
         self._name.pack(fill="x", padx=PAD, ipady=6)
         self._name.focus_set()
+        # Selected, not just present. An unselected default is appended to by
+        # anyone who types straight into the box, and the profile is then saved
+        # under a name nobody was looking for.
+        self._name.select_range(0, "end")
+        self._name.icursor("end")
 
         self._measure = self._option("Measure brush widths and pacing", value=True)
         self._picker = self._option("Bind a colour picker (R, G, B fields)", value=False)
@@ -427,7 +470,7 @@ class App:
 
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.profiles = _load_profiles()
+        self.profiles, self.profile_problem = _load_profiles()
         self.image: Image.Image | None = None
         self.image_name = ""
         self.plan: DrawPlan | None = None
@@ -459,7 +502,7 @@ class App:
 
         self.fields = _Fields(*(tk.StringVar(value="-") for _ in range(6)))
         self.status = tk.StringVar(value="Choose a profile and an image")
-        self.sacrifices = tk.StringVar(value="")
+        self.sacrifices = tk.StringVar(value=self.profile_problem)
         self._set_icon()
         self._build_controls()
         self._show_source()
@@ -590,10 +633,18 @@ class App:
             wraplength=CONTROL_WIDTH - 2 * PAD,
         ).pack(side="bottom", fill="x", padx=PAD)
 
+        buttons = tk.Frame(parent, bg=PANEL)
+        buttons.pack(side="bottom", fill="x", padx=PAD, pady=(0, PAD))
         self.calibrate_button = SecondaryButton(
-            parent, text="Calibrate a canvas", command=self._calibrate
+            buttons,
+            text="Calibrate a canvas",
+            command=self._calibrate,
+            width=CONTROL_WIDTH - 2 * PAD - DELETE_WIDTH - 6,
         )
-        self.calibrate_button.pack(side="bottom", fill="x", padx=PAD, pady=(0, PAD))
+        self.calibrate_button.pack(side="left", fill="x", expand=True)
+        SecondaryButton(
+            buttons, text="Delete", command=self._delete_profile, width=DELETE_WIDTH
+        ).pack(side="left", padx=(6, 0))
 
     def _label(self, text: str) -> None:
         tk.Label(self.controls, text=text, bg=PANEL, fg=MUTED, font=SMALL, anchor="w").pack(
@@ -929,14 +980,19 @@ class App:
         self.root.deiconify()
         self.calibrate_button.relabel("Calibrate a canvas")
         if profile is None:
-            self.status.set(problem)
+            # In the warning colour, not only in the status line. A calibration
+            # that ends without a profile is otherwise indistinguishable from
+            # one that worked: both leave the list exactly as it was.
+            self.sacrifices.set(problem)
+            self.status.set("Nothing was saved. Press Calibrate a canvas to try again")
             return
-        self.profiles = _load_profiles()
+        self.profiles, self.profile_problem = _load_profiles()
         self._rebuild_profile_menu(profile.name)
         widths = ", ".join(f"{width:.0f}" for width in profile.brush_widths)
         picker = " and a colour picker" if profile.picker else ""
+        self.sacrifices.set(self.profile_problem)
         self.status.set(
-            f"Calibrated {profile.name}: {profile.canvas.width}x{profile.canvas.height}, "
+            f"Saved as {profile.name}: {profile.canvas.width}x{profile.canvas.height}, "
             f"{len(profile.palette)} colours, brushes {widths}{picker}"
         )
         self._schedule_replan()
@@ -947,6 +1003,40 @@ class App:
         for name in self.profiles or ["no profiles found"]:
             menu.add_command(label=name, command=lambda value=name: self._choose_profile(value))
         self.profile_name.set(chosen)
+
+    def _delete_profile(self) -> None:
+        """Delete the selected profile, so a canvas can be recalibrated cleanly.
+
+        Only the user's own profiles can go. The bundled ones live inside the
+        executable, and a stale calibration is easier to recognise when the
+        practice canvas is always there to compare against.
+        """
+        if self.drawing or self.calibrating:
+            return
+        name = self.profile_name.get()
+        path = user_profiles_dir() / f"{name}.json"
+        if not path.is_file():
+            self.status.set(f"{name} is built in and cannot be deleted")
+            return
+        dialog = ConfirmDialog(
+            self.root,
+            question=f"Delete the profile {name}?",
+            detail="The calibration is discarded. The canvas it was made for is untouched.",
+            confirm="Delete",
+        )
+        self.root.wait_window(dialog)
+        if not dialog.confirmed:
+            return
+        try:
+            path.unlink()
+        except OSError as error:
+            self.status.set(f"Could not delete {path.name}: {error}")
+            return
+        self.profiles, self.profile_problem = _load_profiles()
+        remaining = next(iter(self.profiles), "no profiles found")
+        self._rebuild_profile_menu(remaining)
+        self.status.set(f"Deleted {name}")
+        self._schedule_replan()
 
     def _choose_profile(self, name: str) -> None:
         self.profile_name.set(name)
@@ -965,11 +1055,17 @@ def _seconds(text: str) -> float:
         return 60.0
 
 
-def _load_profiles() -> dict[str, Profile]:
+def _load_profiles() -> tuple[dict[str, Profile], str]:
+    """Return the profiles and the reason any are missing.
+
+    One unreadable file used to empty the whole list, which looks exactly like
+    a calibration that never saved. The reason is carried out so the window can
+    say which file to go and fix.
+    """
     try:
-        return available_profiles()
-    except ProfileError:
-        return {}
+        return available_profiles(), ""
+    except ProfileError as error:
+        return {}, str(error)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

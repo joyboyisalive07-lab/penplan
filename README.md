@@ -141,7 +141,9 @@ swatches: the **Exact colours** switch in the window makes the planner choose
 the colours of your picture and type them in, which is the difference between a
 portrait and a grey smudge.
 
-The profile lands in `%APPDATA%\penplan\profiles\` as readable JSON.
+The profile lands in `%APPDATA%\penplan\profiles\` as readable JSON. **Delete**
+beside the calibrate button removes the selected one, for when a canvas has
+moved and the old calibration is only in the way.
 
 Before a single mouse event is sent, the palette is read back off the screen and
 compared with the profile. If the window has moved, or the zoom changed, or the

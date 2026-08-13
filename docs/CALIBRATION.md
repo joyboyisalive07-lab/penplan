@@ -182,6 +182,16 @@ wrong and you can see that it is wrong.
 | The drawing is too coarse | Raise the detail slider, or give it more seconds. The sacrifice list says what the budget cut. |
 | Escape does nothing | Another application is holding the Escape hotkey. The tool refuses to start drawing in that case and says so. |
 
+## Deleting a calibration
+
+**Delete**, beside the calibrate button, removes the selected profile after
+asking. Only your own profiles can go; the practice canvas is inside the
+executable and stays, which is useful because it gives you something known-good
+to compare a suspect calibration against.
+
+Deleting the file by hand from `%APPDATA%\penplan\profiles\` does the same
+thing.
+
 ## Editing a profile by hand
 
 Profiles are JSON in `%APPDATA%\penplan\profiles\`. Every field is readable and
