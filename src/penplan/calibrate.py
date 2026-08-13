@@ -428,7 +428,12 @@ PICKER_TEST_COLOR: Final[Rgb] = (37, 149, 211)
 
 
 def apply_color(
-    surface: CalibrationSurface, picker: ColorPicker, color: Rgb, *, already_open: bool = False
+    surface: CalibrationSurface,
+    picker: ColorPicker,
+    color: Rgb,
+    *,
+    already_open: bool = False,
+    close: bool = True,
 ) -> None:
     """Type one colour into the picker, exactly as the executor will.
 
@@ -443,6 +448,11 @@ def apply_color(
     Clicking it then would close the picker and send the rest of the sequence
     to whatever was behind it. Execution starts from a closed picker and both
     opens and closes it, so that no panel is left sitting over the canvas.
+
+    ``close`` exists for the other half of that asymmetry. Calibration has to
+    read the preview back, and on most canvases the preview is a patch inside
+    the panel: close it first and the pixel read belongs to whatever the panel
+    was covering, which is how a correct binding gets rejected.
     """
     if not already_open:
         surface.click(picker.open.x, picker.open.y)
@@ -451,7 +461,8 @@ def apply_color(
         surface.chord((VK_CONTROL, VK_A))
         surface.type_text(str(value))
     surface.chord((VK_TAB,))
-    surface.click(picker.open.x, picker.open.y)
+    if close:
+        surface.click(picker.open.x, picker.open.y)
 
 
 def bind_picker(
@@ -465,9 +476,12 @@ def bind_picker(
         blue=Control(*captures["picker_blue"][0]),
         preview=Control(*captures["picker_preview"][0]),
     )
-    apply_color(surface, picker, PICKER_TEST_COLOR, already_open=True)
+    apply_color(surface, picker, PICKER_TEST_COLOR, already_open=True, close=False)
     time.sleep(_HOVER_SETTLE_SECONDS)
     shown = surface.pixel(picker.preview.x, picker.preview.y)
+    # Closed before the verdict either way: a refused binding should not leave
+    # a panel sitting over the canvas any more than an accepted one.
+    surface.click(picker.open.x, picker.open.y)
     if color_difference(shown, PICKER_TEST_COLOR) > MAX_SWATCH_DRIFT:
         msg = (
             f"the colour picker did not take: {PICKER_TEST_COLOR} was typed in and the "

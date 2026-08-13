@@ -464,6 +464,52 @@ def test_a_picker_is_captured_and_proved_to_work() -> None:
     assert surface.typed[-3:] == [str(value) for value in PICKER_TEST_COLOR]
 
 
+def test_a_preview_inside_the_panel_is_read_before_it_closes() -> None:
+    # On most canvases the preview is a patch inside the picker panel, so it
+    # exists only while the panel is open. Reading it after the closing click
+    # returns whatever the panel was covering, and rejects a binding that works.
+
+    class Panelled(FakeSurface):
+        """A canvas whose preview goes away with the panel."""
+
+        def __init__(self, events: list[tuple[int, tuple[int, int]]]) -> None:
+            super().__init__(events)
+            self.open = True
+
+        def click(self, x: int, y: int) -> None:
+            if (x, y) == PICKER_OPEN:
+                self.open = not self.open
+            super().click(x, y)
+
+        def pixel(self, x: int, y: int) -> Rgb:
+            if (x, y) == PICKER_PREVIEW and not self.open:
+                return BACKGROUND
+            return super().pixel(x, y)
+
+    surface = Panelled(picker_script())
+    request = CalibrationRequest(
+        name="fake", screen=SCREEN, dpi_scale=1.0, measure_by_drawing=False, bind_picker=True
+    )
+    result = calibrate(request, surface, silent)
+    assert result.picker is not None
+    # And the panel is not left sitting over the canvas afterwards.
+    assert not surface.open
+
+
+def test_a_refused_picker_still_closes_the_panel() -> None:
+    class Deaf(FakeSurface):
+        def type_text(self, text: str) -> None:
+            self.typed.append(text)
+
+    surface = Deaf(picker_script())
+    request = CalibrationRequest(
+        name="fake", screen=SCREEN, dpi_scale=1.0, measure_by_drawing=False, bind_picker=True
+    )
+    with pytest.raises(ProfileError):
+        calibrate(request, surface, silent)
+    assert surface.clicks[-1] == PICKER_OPEN
+
+
 def test_a_picker_that_does_not_take_is_refused() -> None:
     class Deaf(FakeSurface):
         def type_text(self, text: str) -> None:
