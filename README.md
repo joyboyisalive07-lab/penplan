@@ -10,7 +10,11 @@ plans the strokes so the drawing finishes inside a time budget you set.
 
 <br>
 
-![Source and dry run](docs/img/dry-run.png)
+![Source, dry run, and the canvas it drew on](docs/img/comparison.png)
+
+The middle panel is the dry run, drawn before anything moves. The right one is
+a screenshot of the canvas afterwards. The plan behind them was estimated at
+10.0 seconds and took 10.1 to execute.
 
 The tool knows nothing about any particular site. It learns a canvas from a
 calibration profile: where the canvas is, what colours the palette actually
@@ -70,6 +74,8 @@ All measured, all reproducible from the tests and the tools in this repository.
 
 | | |
 | --- | --- |
+| An estimate against the same drawing actually executed | 10.0 s planned, 10.1 s real |
+| Brush widths measured from test strokes | 2.0, 6.0, 14.0, 28.0 against a page defining 2, 6, 14, 28 |
 | CIEDE2000 against the 29 published Sharma pairs | agrees to 1e-4 |
 | Planning a 600x450 drawing of five shapes | 0.12 s, 5 fills, 65 strokes, 161 points |
 | That plan rendered against the quantized target | 0.24 per cent of pixels differ |
@@ -107,12 +113,21 @@ are a plausible guess, and the profile records which of the two you have.
 The profile lands in `%APPDATA%\penplan\profiles\`, as readable JSON you can
 edit by hand.
 
+There is a canvas in this repository to practise on: open
+`tools/testcanvas.html` in a browser. It is a plain HTML canvas with a palette,
+two tools and four brush sizes, and it belongs to nobody, so the whole pipeline
+can be exercised without taking part in anyone's game. The bundled `test-canvas`
+profile was made against it, and the picture at the top of this file was drawn
+on it.
+
 Before a single mouse event is sent, the palette is read back off the screen and
 compared with the profile. If the window has moved, or the profile came from
 another machine, the tool says which swatch does not match and refuses rather
 than clicking on whatever is there now.
 
 ## Using it
+
+![The window](docs/img/interface.png)
 
 Run `penplan.exe`, or `python -m penplan` from a checkout. Choose a profile,
 drop an image on the window, enter the seconds you have, and press Draw. Before

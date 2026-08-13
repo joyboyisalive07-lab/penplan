@@ -1,10 +1,12 @@
-"""Render the source and the dry run side by side, for the documentation.
+"""Render the source, the dry run and the real result side by side.
 
-Usage: ``python tools/make_comparison.py IMAGE docs/img/dry-run.png``.
+Usage::
 
-Both panels come out of the planner itself: the left is what was fed in, the
-right is what the executor would draw, rendered by the same code that verifies
-the fills. Nothing is touched up.
+    python tools/make_comparison.py IMAGE OUT --profile PROFILE [--actual SHOT]
+
+The middle panel comes out of the planner itself, rendered by the same code
+that verifies the fills. The third, when given, is a screenshot of a canvas the
+tool actually drew on. Nothing is touched up.
 """
 
 import argparse
@@ -24,7 +26,7 @@ BACKGROUND = (18, 20, 26)
 LABEL = (134, 143, 162)
 GAP = 24
 LABEL_HEIGHT = 30
-PANEL = 460
+PANEL = 420
 
 
 def main() -> int:
@@ -35,6 +37,9 @@ def main() -> int:
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--seconds", type=float, default=60.0)
     parser.add_argument("--detail", type=float, default=0.6)
+    parser.add_argument(
+        "--actual", type=Path, default=None, help="a screenshot of the canvas after drawing"
+    )
     arguments = parser.parse_args()
 
     profile = load(arguments.profile)
@@ -52,6 +57,11 @@ def main() -> int:
     preview = render_plan(plan, background)
 
     panels = [source, preview]
+    captions = ["SOURCE", "DRY RUN"]
+    if arguments.actual is not None:
+        with Image.open(arguments.actual) as shot:
+            panels.append(shot.convert("RGB"))
+        captions.append("DRAWN ON THE CANVAS")
     scaled = [
         panel.resize(
             (PANEL, max(1, round(PANEL * panel.height / panel.width))), Image.Resampling.LANCZOS
@@ -59,9 +69,14 @@ def main() -> int:
         for panel in panels
     ]
     height = max(panel.height for panel in scaled)
-    sheet = Image.new("RGB", (PANEL * 2 + GAP * 3, height + LABEL_HEIGHT + GAP * 2), BACKGROUND)
+    columns = len(scaled)
+    sheet = Image.new(
+        "RGB",
+        (PANEL * columns + GAP * (columns + 1), height + LABEL_HEIGHT + GAP * 2),
+        BACKGROUND,
+    )
     draw = ImageDraw.Draw(sheet)
-    for index, (panel, caption) in enumerate(zip(scaled, ("SOURCE", "DRY RUN"), strict=True)):
+    for index, (panel, caption) in enumerate(zip(scaled, captions, strict=True)):
         x = GAP + index * (PANEL + GAP)
         draw.text((x, GAP - 6), caption, fill=LABEL)
         sheet.paste(panel, (x, GAP + LABEL_HEIGHT))

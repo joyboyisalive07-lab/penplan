@@ -65,6 +65,8 @@ class FakeSurface:
         self._marks: set[tuple[int, int]] = set()
         self.paces: list[float] = []
         self.clicks: list[tuple[int, int]] = []
+        self.moves: list[tuple[int, int]] = []
+        self.taps: list[tuple[int, int]] = []
         self.parked: tuple[int, int] | None = None
         self.drags: list[list[tuple[int, int]]] = []
 
@@ -83,6 +85,12 @@ class FakeSurface:
 
     def park(self, x: int, y: int) -> None:
         self.parked = (x, y)
+
+    def move(self, x: int, y: int) -> None:
+        self.moves.append((x, y))
+
+    def tap(self, x: int, y: int) -> None:
+        self.taps.append((x, y))
 
     def click(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
@@ -164,13 +172,32 @@ def test_wizard_reads_palette_colours_with_the_cursor_parked_away() -> None:
 
 
 def test_calibration_never_clicks_inside_the_canvas() -> None:
-    # The timing run clicks swatches and tool buttons, and that is the whole
-    # list. A click inside the canvas would leave a mark on the user's drawing.
+    # A click inside the canvas would leave a mark on the user's drawing. Moves
+    # over it are fine, and are how the palette is read without a hover state.
     surface = FakeSurface(full_script())
     result = calibrate(request(), surface, silent)
-    assert surface.clicks
-    for x, y in surface.clicks:
+    for x, y in surface.clicks + surface.taps:
         assert not result.canvas.contains(x, y)
+
+
+def test_timing_measures_bare_moves_not_settled_ones() -> None:
+    # The parked move waits for hover states to settle, on purpose. Timing that
+    # instead of a bare move reported 150 ms per mouse move on a real canvas,
+    # which would have made every estimate five times too long.
+    surface = FakeSurface(full_script())
+    calibrate(request(), surface, silent)
+    assert surface.moves
+    assert len(surface.moves) > len(surface.clicks)
+
+
+def test_switching_costs_follow_from_the_primitives() -> None:
+    surface = FakeSurface(full_script())
+    cost = calibrate(request(), surface, silent).cost
+    settle = DEFAULT_PACING.settle_seconds + DEFAULT_PACING.hold_seconds
+    expected = 2 * cost.seconds_per_move + cost.seconds_per_click + settle
+    assert cost.seconds_per_color_switch == pytest.approx(expected)
+    # A tool change also loses the brush size, so it costs the trip twice.
+    assert cost.seconds_per_tool_switch == pytest.approx(2 * expected)
 
 
 def test_the_wizard_always_times_the_mouse() -> None:

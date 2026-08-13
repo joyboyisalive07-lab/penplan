@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>penplan test canvas</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #101216; color: #cfd4de;
+    font: 13px "Segoe UI", system-ui, sans-serif;
+    display: flex; gap: 24px; padding: 24px; align-items: flex-start;
+  }
+  #tools { display: flex; flex-direction: column; gap: 18px; width: 168px; }
+  .group { display: flex; flex-direction: column; gap: 8px; }
+  .label { color: #7f8798; font-size: 11px; letter-spacing: .08em; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    width: 56px; height: 34px; border: 1px solid #2a3040; background: #191d25;
+    color: #cfd4de; border-radius: 6px; cursor: pointer; font: inherit;
+  }
+  button.on { border-color: #e3a04a; color: #e3a04a; }
+  .swatch { width: 34px; height: 34px; border: 1px solid #2a3040; border-radius: 4px; cursor: pointer; }
+  .swatch.on { outline: 2px solid #e3a04a; outline-offset: 1px; }
+  canvas { background: #ffffff; border: 1px solid #2a3040; cursor: crosshair; touch-action: none; }
+</style>
+</head>
+<body>
+<div id="tools">
+  <div class="group">
+    <div class="label">TOOL</div>
+    <div class="row">
+      <button id="brush" class="on">brush</button>
+      <button id="fill">fill</button>
+    </div>
+  </div>
+  <div class="group">
+    <div class="label">SIZE</div>
+    <div class="row" id="sizes"></div>
+  </div>
+  <div class="group">
+    <div class="label">COLOUR</div>
+    <div class="row" id="palette"></div>
+  </div>
+  <div class="group">
+    <div class="label">CANVAS</div>
+    <div class="row"><button id="clear" style="width:120px">clear</button></div>
+  </div>
+</div>
+<canvas id="paper" width="800" height="600"></canvas>
+<script>
+const COLOURS = [
+  "#000000", "#7f7f7f", "#c3c3c3", "#ffffff",
+  "#b97a57", "#ed1c24", "#ff7f27", "#fff200",
+  "#22b14c", "#00a2e8", "#3f48cc", "#a349a4",
+];
+const SIZES = [2, 6, 14, 28];
+
+const paper = document.getElementById("paper");
+const context = paper.getContext("2d", { willReadFrequently: true });
+let colour = COLOURS[0];
+let size = SIZES[0];
+let tool = "brush";
+let drawing = false;
+
+function clear() {
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, paper.width, paper.height);
+}
+clear();
+
+const sizes = document.getElementById("sizes");
+SIZES.forEach((value, index) => {
+  const button = document.createElement("button");
+  button.textContent = value;
+  button.className = index === 0 ? "on" : "";
+  button.onclick = () => {
+    size = value;
+    [...sizes.children].forEach((other) => other.classList.remove("on"));
+    button.classList.add("on");
+  };
+  sizes.append(button);
+});
+
+const palette = document.getElementById("palette");
+COLOURS.forEach((value, index) => {
+  const swatch = document.createElement("div");
+  swatch.className = index === 0 ? "swatch on" : "swatch";
+  swatch.style.background = value;
+  swatch.onclick = () => {
+    colour = value;
+    [...palette.children].forEach((other) => other.classList.remove("on"));
+    swatch.classList.add("on");
+  };
+  palette.append(swatch);
+});
+
+function selectTool(name) {
+  tool = name;
+  document.getElementById("brush").className = name === "brush" ? "on" : "";
+  document.getElementById("fill").className = name === "fill" ? "on" : "";
+}
+document.getElementById("brush").onclick = () => selectTool("brush");
+document.getElementById("fill").onclick = () => selectTool("fill");
+document.getElementById("clear").onclick = clear;
+
+function at(event) {
+  const box = paper.getBoundingClientRect();
+  return [
+    Math.round((event.clientX - box.left) * paper.width / box.width),
+    Math.round((event.clientY - box.top) * paper.height / box.height),
+  ];
+}
+
+function rgb(hex) {
+  return [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+}
+
+// Four-way flood fill, the same rule the planner simulates against.
+function flood(x, y) {
+  const image = context.getImageData(0, 0, paper.width, paper.height);
+  const data = image.data;
+  const start = (y * paper.width + x) * 4;
+  const target = [data[start], data[start + 1], data[start + 2]];
+  const [r, g, b] = rgb(colour);
+  if (target[0] === r && target[1] === g && target[2] === b) return;
+  const stack = [[x, y]];
+  while (stack.length) {
+    const [px, py] = stack.pop();
+    if (px < 0 || py < 0 || px >= paper.width || py >= paper.height) continue;
+    const offset = (py * paper.width + px) * 4;
+    if (data[offset] !== target[0] || data[offset + 1] !== target[1] || data[offset + 2] !== target[2]) continue;
+    data[offset] = r; data[offset + 1] = g; data[offset + 2] = b; data[offset + 3] = 255;
+    stack.push([px + 1, py], [px - 1, py], [px, py + 1], [px, py - 1]);
+  }
+  context.putImageData(image, 0, 0);
+}
+
+paper.addEventListener("pointerdown", (event) => {
+  const [x, y] = at(event);
+  if (tool === "fill") { flood(x, y); return; }
+  drawing = true;
+  paper.setPointerCapture(event.pointerId);
+  context.strokeStyle = colour;
+  context.fillStyle = colour;
+  context.lineWidth = size;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.beginPath();
+  context.moveTo(x, y);
+  context.arc(x, y, size / 2, 0, Math.PI * 2);
+  context.fill();
+  context.beginPath();
+  context.moveTo(x, y);
+});
+
+paper.addEventListener("pointermove", (event) => {
+  if (!drawing) return;
+  const [x, y] = at(event);
+  context.lineTo(x, y);
+  context.stroke();
+  context.beginPath();
+  context.moveTo(x, y);
+});
+
+for (const name of ["pointerup", "pointerleave", "pointercancel"]) {
+  paper.addEventListener(name, () => { drawing = false; });
+}
+</script>
+</body>
+</html>

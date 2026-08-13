@@ -161,11 +161,19 @@ class CalibrationSurface(Protocol):
         ...
 
     def park(self, x: int, y: int) -> None:
-        """Move the cursor somewhere harmless without clicking."""
+        """Move the cursor somewhere harmless and wait for the page to settle."""
+        ...
+
+    def move(self, x: int, y: int) -> None:
+        """Move the cursor, waiting for nothing. This is what timing measures."""
         ...
 
     def click(self, x: int, y: int) -> None:
-        """Click once at a physical screen pixel."""
+        """Click once at a physical screen pixel, with waits either side."""
+        ...
+
+    def tap(self, x: int, y: int) -> None:
+        """Click with no waits at all, so that timing measures the events."""
         ...
 
     def drag(self, points: Sequence[tuple[int, int]], seconds_between: float) -> None:
@@ -425,18 +433,27 @@ def measure_pacing(surface: CalibrationSurface, canvas: ScreenRect, ink: Swatch)
     return replace(DEFAULT_PACING, point_seconds=PACING_LADDER[-1])
 
 
-def measure_costs(surface: CalibrationSurface, profile: Profile) -> CostModel:
+def measure_costs(surface: CalibrationSurface, profile: Profile, pacing: Pacing) -> CostModel:
     """Time the primitives a plan is built from, on the machine that will run it.
 
-    The run is deliberately short and deliberately harmless: it moves the
-    cursor over the canvas and clicks palette swatches and tool buttons, which
-    change the selected colour and tool and nothing else. It never presses on
-    the canvas, so nothing is drawn.
+    The run is short and harmless: it moves the cursor over the canvas and taps
+    palette swatches and tool buttons, which changes the selection and draws
+    nothing. It never presses on the canvas.
 
     Two move distances are timed rather than one, because the two parts of the
     cost have to be separated: the fixed price of sending an event, and
     whatever extra a long jump costs. On synthetic input the second is usually
     close to nothing, and the estimate should say so rather than assume it.
+
+    Nothing here waits on purpose. An earlier version timed the parked move the
+    wizard uses to let hover states settle, and came back with 150 milliseconds
+    per mouse move, which would have made every estimate five times too long.
+
+    The switching costs are not timed at all: they are derived from the
+    primitives and the pacing, because the schedule says exactly what a switch
+    is. A colour change is a trip to the swatch and back with a click in the
+    middle; a tool change is that twice over, since changing tool is assumed to
+    lose the brush size.
     """
     canvas = profile.canvas
     near = (canvas.left + canvas.width // 2, canvas.top + canvas.height // 2)
@@ -452,28 +469,14 @@ def measure_costs(surface: CalibrationSurface, profile: Profile) -> CostModel:
     per_move = max(_MIN_COST_SECONDS, short_seconds - per_pixel * short_distance)
 
     swatch = profile.palette[0]
-    per_click = max(_MIN_COST_SECONDS, _time_clicks(surface, [(swatch.x, swatch.y)]) - per_move)
-    per_color = max(
-        per_click,
-        _time_clicks(surface, [(other.x, other.y) for other in profile.palette[:2]], park=near),
-    )
-    per_tool = max(
-        per_click,
-        _time_clicks(
-            surface,
-            [
-                (profile.fill_tool.x, profile.fill_tool.y),
-                (profile.brush_tool.x, profile.brush_tool.y),
-            ],
-            park=near,
-        ),
-    )
+    per_click = max(_MIN_COST_SECONDS, _time_taps(surface, (swatch.x, swatch.y)) - per_move)
+    round_trip = 2 * per_move + per_click + pacing.settle_seconds + pacing.hold_seconds
     return CostModel(
         seconds_per_move=per_move,
         seconds_per_pixel=per_pixel,
         seconds_per_click=per_click,
-        seconds_per_color_switch=per_color,
-        seconds_per_tool_switch=per_tool,
+        seconds_per_color_switch=round_trip,
+        seconds_per_tool_switch=2 * round_trip,
     )
 
 
@@ -481,22 +484,15 @@ def _time_moves(surface: CalibrationSurface, points: Sequence[tuple[int, int]]) 
     start = time.perf_counter()
     for _ in range(_COST_SAMPLES):
         for point in points:
-            surface.park(*point)
+            surface.move(*point)
     return (time.perf_counter() - start) / (_COST_SAMPLES * len(points))
 
 
-def _time_clicks(
-    surface: CalibrationSurface,
-    points: Sequence[tuple[int, int]],
-    park: tuple[int, int] | None = None,
-) -> float:
+def _time_taps(surface: CalibrationSurface, point: tuple[int, int]) -> float:
     start = time.perf_counter()
     for _ in range(_COST_SAMPLES):
-        for point in points:
-            surface.click(*point)
-            if park is not None:
-                surface.park(*park)
-    return (time.perf_counter() - start) / (_COST_SAMPLES * len(points))
+        surface.tap(*point)
+    return (time.perf_counter() - start) / _COST_SAMPLES
 
 
 def _pick_ink(palette: Sequence[Swatch], background: Rgb) -> Swatch:
@@ -570,7 +566,7 @@ def calibrate(
     # arithmetic about somebody else's machine. This clicks swatches and tool
     # buttons, which changes the selection and draws nothing.
     announce("Timing the mouse")
-    return replace(profile, cost=measure_costs(surface, profile))
+    return replace(profile, cost=measure_costs(surface, profile, pacing))
 
 
 class WindowsSurface:
@@ -606,6 +602,16 @@ class WindowsSurface:
         """Move the cursor somewhere harmless and let the page settle."""
         self._pointer.move_to(x, y)
         time.sleep(_HOVER_SETTLE_SECONDS)
+
+    def move(self, x: int, y: int) -> None:
+        """Move the cursor, waiting for nothing."""
+        self._pointer.move_to(x, y)
+
+    def tap(self, x: int, y: int) -> None:
+        """Click with no waits at all."""
+        self._pointer.move_to(x, y)
+        self._pointer.press()
+        self._pointer.release()
 
     def click(self, x: int, y: int) -> None:
         """Click once at a physical screen pixel."""
