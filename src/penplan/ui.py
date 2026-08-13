@@ -75,6 +75,8 @@ WINDOW_WIDTH: Final = 1180
 WINDOW_HEIGHT: Final = 780
 
 COUNTDOWN_SECONDS: Final = 3
+# Long enough for this window to actually be gone before the screen is read.
+STEP_ASIDE_MS: Final = 450
 # Planning is not instant, so a keystroke in the budget box should not start a
 # plan per character.
 REPLAN_DELAY_MS: Final = 350
@@ -570,8 +572,6 @@ class App:
     def _start(self) -> None:
         if self.plan is None or self.drawing:
             return
-        if not self.overridden and not self._profile_still_fits():
-            return
         self.drawing = True
         self.button.configure_state(enabled=False, text="Drawing")
         self._countdown(COUNTDOWN_SECONDS)
@@ -596,8 +596,9 @@ class App:
             return True
         self.overridden = True
         self.status.set(
-            f"{result.complaints[0]}. Recalibrate, or move the window back. "
-            "Press again to draw anyway."
+            f"{result.complaints[0]}. The canvas is not where the profile says: put the "
+            "window back where you calibrated it, or calibrate again. Press Draw again "
+            "to go ahead anyway."
         )
         self.button.configure_state(enabled=True, text="Draw anyway")
         return False
@@ -606,28 +607,44 @@ class App:
         if not self.drawing:
             return
         if left == 0:
-            self._execute()
+            self._step_aside()
             return
         self.status.set(f"Focus the canvas. Starting in {left}. Escape stops it.")
         self.preview_pane.show(None, str(left))
         self.root.after(1000, self._countdown, left - 1)
+
+    def _step_aside(self) -> None:
+        """Get out of the way, then check the canvas, then draw.
+
+        In that order, and the order is the whole point. This window sits over
+        the canvas by default, so checking the screen while it is still on top
+        reads this window's own background and reports that every palette
+        colour has moved. It also has to be gone before anything is drawn, or
+        the drawing lands on it.
+        """
+        self.status.set("Checking the canvas")
+        self.root.iconify()
+        self.root.after(STEP_ASIDE_MS, self._execute)
 
     def _execute(self) -> None:
         profile = self.profiles[self.profile_name.get()]
         plan = self.plan
         if plan is None:
             return
+        if not self.overridden and not self._profile_still_fits():
+            self.root.deiconify()
+            self.drawing = False
+            return
         actions = schedule(plan.steps, (plan.width, plan.height), profile, profile.pacing)
         self.hotkey = AbortHotkey()
         try:
             self.hotkey.start()
         except HotkeyUnavailableError as error:
+            self.root.deiconify()
             self.drawing = False
             self.status.set(str(error))
             self.button.configure_state(enabled=True, text="Draw")
             return
-        # Out of the way: a window sitting over the canvas would be drawn on.
-        self.root.iconify()
         threading.Thread(target=self._draw_worker, args=(actions,), daemon=True).start()
 
     def _draw_worker(self, actions: Sequence[Action]) -> None:

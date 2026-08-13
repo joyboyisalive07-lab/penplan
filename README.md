@@ -158,6 +158,25 @@ Draw starts a three-second countdown so you can focus the canvas, and the window
 steps out of the way while it draws. **Escape stops it at any moment**, releases
 the mouse button and gives the mouse back.
 
+## Getting a good drawing out of it
+
+The dry run is the truth. If it looks wrong there, it will look wrong on the
+canvas, and the two failures worth knowing apart are these.
+
+**The palette cannot express the picture.** A desaturated photograph on an
+eighteen colour palette of saturated crayons comes out grey, and no planner can
+help. Flat, high contrast pictures with few colours are what this does well.
+
+**The budget had to cut something.** More detail is not free: a finer raster
+finds more regions, and if the seconds do not move with it the ladder starts
+dropping them again. Raising the detail slider without raising the budget can
+make the result worse, and the sacrifice list under the numbers says so.
+
+Two smaller things: crop the image to the shape of the canvas first, or it gets
+letterboxed with bands of background down the sides, and remember that each
+colour in the profile is a trip to the palette, so a profile with twelve
+useful colours draws faster than one with all eighteen.
+
 ## Building from source
 
 ```bash
