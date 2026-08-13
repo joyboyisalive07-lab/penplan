@@ -88,11 +88,19 @@ and it is measured on your machine rather than assumed.
 
 - **Calibrate in a private lobby, in your own round.** The drawing screen only
   exists while a round is running, and calibrating during someone else's game
-  is both rude and rushed.
-- **The brush size is a slider on some layouts.** A click on a slider jumps to
-  the position clicked, so capture two to four points along it as if they were
-  buttons, thinnest first. Use `--measure` so the planner learns what each of
-  those positions actually paints instead of assuming.
+  is both rude and rushed. The round timer is in the top right corner.
+- **The canvas** is the white sheet in the middle. Its corners are the corners
+  of the white, not of the purple frame around it.
+- **The palette** is the block of eighteen swatches on the left, three across.
+  The wide black rectangle underneath it is the current colour, not a swatch:
+  capturing it would record whatever happens to be selected.
+- **The brush** is the pencil at the top of the tool panel on the right. **The
+  fill** is the paint bucket in the same panel, on the row with the line tool.
+  The eraser, the shapes, the undo and the redo are not used.
+- **The brush sizes** are the row of five round buttons at the bottom left,
+  smallest first. The slider beside them is not a size, so leave it alone.
+- **Never capture the ГОТОВО button.** It submits the drawing, and a profile
+  that thinks it is a brush size will press it in the middle of one.
 - **Set the time budget to the seconds left in the round, minus five.** The
   estimate is accurate to about one per cent, but a round that ends mid-stroke
   submits a half-finished drawing.

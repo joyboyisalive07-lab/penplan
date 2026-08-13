@@ -103,6 +103,9 @@ the canvas out from under every coordinate you are about to capture.
 python tools/calibrate.py gartic-phone --measure
 ```
 
+A strip appears across the top of the screen with the current instruction, so
+you can read it while pointing at the browser.
+
 **Then** point at each thing it asks for and press **F8**. Press **F9** to
 finish a list, **Escape** to abort at any point. The order is fixed:
 
