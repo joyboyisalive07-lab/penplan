@@ -3,6 +3,7 @@
 # penplan
 
 [![ci](https://github.com/joyboyisalive07-lab/penplan/actions/workflows/ci.yml/badge.svg)](https://github.com/joyboyisalive07-lab/penplan/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/joyboyisalive07-lab/penplan)](https://github.com/joyboyisalive07-lab/penplan/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Воспроизводит изображение на браузерном холсте для рисования, двигая настоящую
@@ -188,7 +189,8 @@ R, G и B, куда можно вписать числа. Откройте её 
 
 ![Окно](docs/img/interface.png)
 
-Запустите `penplan.exe` или `python -m penplan` из исходников. Выберите профиль,
+[Скачайте `penplan.exe`](https://github.com/joyboyisalive07-lab/penplan/releases/latest)
+и запустите, либо `python -m penplan` из исходников. Выберите профиль,
 бросьте картинку в окно, введите доступные секунды и нажмите Draw. До того как
 что-либо произойдёт, вы видите оценку длительности, число штрихов, заливок и
 цветов, сухой прогон ровно того, что будет нарисовано, и список того, чем бюджет

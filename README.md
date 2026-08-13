@@ -3,6 +3,7 @@
 # penplan
 
 [![ci](https://github.com/joyboyisalive07-lab/penplan/actions/workflows/ci.yml/badge.svg)](https://github.com/joyboyisalive07-lab/penplan/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/joyboyisalive07-lab/penplan)](https://github.com/joyboyisalive07-lab/penplan/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Reproduces an image on a browser drawing canvas by moving the real mouse, and
@@ -161,7 +162,8 @@ different about Gartic Phone, is in [docs/CALIBRATION.md](docs/CALIBRATION.md).
 
 ![The window](docs/img/interface.png)
 
-Run `penplan.exe`, or `python -m penplan` from a checkout. Choose a profile,
+[Download `penplan.exe`](https://github.com/joyboyisalive07-lab/penplan/releases/latest)
+and run it, or `python -m penplan` from a checkout. Choose a profile,
 drop an image on the window, enter the seconds you have, and press Draw. Before
 anything happens you get the estimated duration, the stroke, fill and colour
 counts, a dry run of exactly what will be drawn, and a list of what the budget
