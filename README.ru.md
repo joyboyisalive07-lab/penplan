@@ -1,4 +1,4 @@
-<img src="docs/img/logo.svg" width="72" align="left" alt="penplan">
+<img src="docs/img/logo.png" width="72" align="left" alt="penplan">
 
 # penplan
 
