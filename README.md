@@ -87,43 +87,59 @@ All measured, all reproducible from the tests and the tools in this repository.
 
 ## Calibrating a canvas
 
-Arrange the window first, so that the canvas, the whole palette, both tools and
-every brush size are visible at once. Then run the wizard:
+This is the one step that makes it work on your screen, and it takes a minute.
+Gartic Phone, skribbl.io and drawaria.online are all the same procedure.
+
+![What the wizard asks for, in order](docs/img/calibration.png)
+
+**First**, set the browser zoom to 100 per cent with `Ctrl+0`, maximise the
+window, and arrange it so the canvas, the colours, both tools and the brush
+sizes are visible at once. Do not scroll the page after this: scrolling moves
+the canvas out from under every coordinate you are about to capture.
+
+**Then** run the wizard, naming the profile whatever you will recognise:
 
 ```bash
 python tools/calibrate.py gartic-phone --measure
 ```
 
-Hover over each target and press **F8** to capture it, **F9** to finish a list,
-**Escape** to abort. In order: the canvas top-left corner, the canvas
-bottom-right corner, every palette colour, the brush tool, the fill tool, and
-every brush size from thinnest to widest.
+**Then** point at each thing it asks for and press **F8**. Press **F9** to
+finish a list, **Escape** to abort at any point. The order is fixed:
 
-Nothing is clicked while positions are being captured. A click on a canvas
-corner would leave a dot on the drawing, and a click on a swatch would change
-the tool halfway through. Palette colours are read afterwards, with the cursor
-parked in the middle of the canvas, because a swatch under the pointer is drawn
-in a hover state and that highlight would be recorded as the colour.
+1. the top-left corner of the canvas,
+2. the bottom-right corner of the canvas,
+3. every palette colour you want used, then F9,
+4. the brush tool,
+5. the fill tool,
+6. every brush size, thinnest first, then F9.
 
-`--measure` draws a short test stroke per brush size and a zigzag, which
-measures what each brush actually paints and how fast the canvas can be fed.
-It writes on the canvas, so clear the canvas afterwards. Without it the widths
+Nothing is clicked while you are pointing. A click on the canvas corner would
+leave a dot on the drawing, and a click on a swatch would change the tool
+halfway through. The colours are read afterwards, with the cursor parked in the
+middle of the canvas, because a swatch under the pointer is drawn in a hover
+state on most sites and that highlight would be recorded as the colour.
+
+`--measure` draws a test stroke per brush size and a zigzag on the canvas, which
+is how the planner learns what each brush actually paints and how fast the
+canvas can be fed. **Clear the canvas afterwards.** Without the flag the widths
 are a plausible guess, and the profile records which of the two you have.
 
-The profile lands in `%APPDATA%\penplan\profiles\`, as readable JSON you can
-edit by hand.
-
-There is a canvas in this repository to practise on: open
-`tools/testcanvas.html` in a browser. It is a plain HTML canvas with a palette,
-two tools and four brush sizes, and it belongs to nobody, so the whole pipeline
-can be exercised without taking part in anyone's game. The bundled `test-canvas`
-profile was made against it, and the picture at the top of this file was drawn
-on it.
+The profile lands in `%APPDATA%\penplan\profiles\` as readable JSON.
 
 Before a single mouse event is sent, the palette is read back off the screen and
-compared with the profile. If the window has moved, or the profile came from
-another machine, the tool says which swatch does not match and refuses rather
-than clicking on whatever is there now.
+compared with the profile. If the window has moved, or the zoom changed, or the
+profile came from another machine, the tool names the swatch that does not match
+and refuses rather than clicking on whatever is there now.
+
+**Practise first.** Open `tools/testcanvas.html` from this repository in a
+browser: a plain HTML canvas with a palette, two tools and four brush sizes,
+belonging to nobody. Calibrate against that, draw on it, and get a feel for the
+detail slider before pointing the tool at a real round. The bundled
+`test-canvas` profile was made against it, and the picture at the top of this
+file was drawn on it.
+
+The longer version, including what to do when something goes wrong and what is
+different about Gartic Phone, is in [docs/CALIBRATION.md](docs/CALIBRATION.md).
 
 ## Using it
 
