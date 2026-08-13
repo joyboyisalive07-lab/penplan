@@ -75,7 +75,8 @@ def srgb_to_linear(channel: int) -> float:
 def srgb_to_xyz(color: Rgb) -> tuple[float, float, float]:
     """Convert an 8-bit sRGB colour to CIE XYZ under D65."""
     linear = [srgb_to_linear(channel) for channel in color]
-    return tuple(sum(row[index] * linear[index] for index in range(3)) for row in _RGB_TO_XYZ)  # type: ignore[return-value]
+    x, y, z = (sum(row[index] * linear[index] for index in range(3)) for row in _RGB_TO_XYZ)
+    return (x, y, z)
 
 
 def _lab_transfer(ratio: float) -> float:
