@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from penplan.model import DEFAULT_COST_MODEL, DEFAULT_PACING, Point, ScreenRect
 from penplan.profile import (
     PROFILE_FORMAT,
     BrushControl,
+    ColorPicker,
     Control,
     Profile,
     ProfileError,
@@ -28,6 +30,14 @@ from penplan.profile import (
 
 # The display scales Windows offers by default, as fractions.
 SCALES = (1.0, 1.25, 1.5, 2.0)
+
+PICKER = ColorPicker(
+    open=Control(x=10, y=900),
+    red=Control(x=10, y=940),
+    green=Control(x=40, y=940),
+    blue=Control(x=70, y=940),
+    preview=Control(x=10, y=900),
+)
 
 
 def make_profile(**overrides: object) -> Profile:
@@ -237,3 +247,52 @@ def test_missing_profile_directories_are_empty_not_fatal(
 ) -> None:
     monkeypatch.setattr(profile_module, "user_profiles_dir", lambda: tmp_path / "absent")
     assert available_profiles() == bundled_profiles()
+
+
+def test_a_nameless_profile_is_refused() -> None:
+    with pytest.raises(ProfileError, match="needs a name"):
+        make_profile(name="")
+
+
+def test_a_profile_without_brushes_is_refused() -> None:
+    with pytest.raises(ProfileError, match="at least one brush size"):
+        make_profile(brushes=())
+
+
+def test_a_profile_with_no_scale_is_refused() -> None:
+    with pytest.raises(ProfileError, match="dpi scale must be positive"):
+        make_profile(dpi_scale=0.0)
+
+
+def test_a_picker_survives_the_round_trip() -> None:
+    original = make_profile(picker=PICKER)
+    restored = from_json_dict(json.loads(json.dumps(original.to_json_dict())))
+    assert restored.picker == PICKER
+
+
+def test_a_malformed_picker_is_named_not_swallowed() -> None:
+    broken = make_profile(picker=PICKER).to_json_dict()
+    broken["picker"] = {"open": {"x": 1}}
+    with pytest.raises(ProfileError, match="colour picker is malformed"):
+        from_json_dict(broken)
+
+
+def test_a_picker_control_inside_the_canvas_is_refused() -> None:
+    # The same mis-calibration as a swatch inside the canvas: opening the
+    # picker would put a mark on the drawing.
+    inside = replace(PICKER, open=Control(x=200, y=300))
+    with pytest.raises(ProfileError, match="inside the canvas"):
+        make_profile(picker=inside)
+
+
+def test_rescaling_carries_the_picker_with_it() -> None:
+    rescaled = make_profile(picker=PICKER).rescaled(2.0)
+    assert rescaled.picker is not None
+    assert rescaled.picker.red.x == scale_pixel(PICKER.red.x, 2.0)
+
+
+def test_a_profile_that_is_not_an_object_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "list.json"
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+    with pytest.raises(ProfileError, match="does not contain a profile object"):
+        load(path)

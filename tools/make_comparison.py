@@ -18,7 +18,6 @@ from PIL import Image, ImageDraw
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from penplan.budget import PlanRequest, plan_within_budget
-from penplan.palette import Palette
 from penplan.profile import load
 from penplan.render import render_plan
 
@@ -27,6 +26,20 @@ LABEL = (134, 143, 162)
 GAP = 24
 LABEL_HEIGHT = 30
 PANEL = 420
+
+
+def _framed(panel: Image.Image, aspect: float) -> Image.Image:
+    """Crop the bands a canvas of a different shape puts around the picture.
+
+    A portrait image on a landscape canvas is letterboxed, in the plan and on
+    the screen alike. Those bands are background the tool never draws, and
+    leaving them in makes the panel a third the size of the one beside it.
+    """
+    width = min(panel.width, round(panel.height * aspect))
+    height = min(panel.height, round(panel.width / aspect))
+    left = (panel.width - width) // 2
+    top = (panel.height - height) // 2
+    return panel.crop((left, top, left + width, top + height))
 
 
 def main() -> int:
@@ -40,6 +53,12 @@ def main() -> int:
     parser.add_argument(
         "--actual", type=Path, default=None, help="a screenshot of the canvas after drawing"
     )
+    parser.add_argument(
+        "--picker",
+        action="store_true",
+        help="choose colours from the image and type them, for a profile with a bound picker",
+    )
+    parser.add_argument("--colors", type=int, default=12, help="how many colours to choose")
     arguments = parser.parse_args()
 
     profile = load(arguments.profile)
@@ -51,16 +70,18 @@ def main() -> int:
             profile=profile,
             budget_seconds=arguments.seconds,
             detail=arguments.detail,
+            use_picker=arguments.picker,
+            colors=arguments.colors,
         )
     )
-    background = Palette(profile.colors).nearest(profile.background)
-    preview = render_plan(plan, background)
+    preview = render_plan(plan)
 
-    panels = [source, preview]
+    aspect = source.width / source.height
+    panels = [source, _framed(preview, aspect)]
     captions = ["SOURCE", "DRY RUN"]
     if arguments.actual is not None:
         with Image.open(arguments.actual) as shot:
-            panels.append(shot.convert("RGB"))
+            panels.append(_framed(shot.convert("RGB"), aspect))
         captions.append("DRAWN ON THE CANVAS")
     scaled = [
         panel.resize(

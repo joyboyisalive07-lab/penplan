@@ -24,15 +24,20 @@ from enum import Enum
 from typing import TYPE_CHECKING, Final, Protocol, Self
 
 from penplan.input_win import (
+    VK_A,
+    VK_CONTROL,
     VK_ESCAPE,
     VK_F8,
     VK_F9,
+    VK_TAB,
     AbortedError,
     HotkeyListener,
     Pointer,
     ScreenPixels,
     cursor_position,
     enable_dpi_awareness,
+    press_keys,
+    type_text,
     virtual_screen,
 )
 from penplan.model import DEFAULT_COST_MODEL, DEFAULT_PACING, CostModel, Pacing, Rgb, ScreenRect
@@ -40,6 +45,7 @@ from penplan.palette import color_difference
 from penplan.profile import (
     MIN_CANVAS_SIDE,
     BrushControl,
+    ColorPicker,
     Control,
     Profile,
     ProfileError,
@@ -176,6 +182,14 @@ class CalibrationSurface(Protocol):
         """Click with no waits at all, so that timing measures the events."""
         ...
 
+    def type_text(self, text: str) -> None:
+        """Type a string into whatever has the keyboard focus."""
+        ...
+
+    def chord(self, keys: Sequence[int]) -> None:
+        """Press keys together and release them in the opposite order."""
+        ...
+
     def drag(self, points: Sequence[tuple[int, int]], seconds_between: float) -> None:
         """Draw a pen-down polyline through exactly these pixels, at this pace."""
         ...
@@ -194,6 +208,9 @@ class CalibrationRequest:
     dpi_scale: float
     measure_by_drawing: bool
     """Whether to draw test strokes, which measures brush widths and pacing."""
+
+    bind_picker: bool = False
+    """Whether to capture a colour picker, for canvases that have one."""
 
 
 def canvas_from_corners(first: tuple[int, int], second: tuple[int, int]) -> ScreenRect:
@@ -395,6 +412,72 @@ def verify_against_screen(
     return Verification(ok=not complaints, complaints=tuple(complaints))
 
 
+PICKER_SCRIPT: Final = (
+    CalibrationStep(
+        "picker_open", "Point at the control that opens the colour picker", StepKind.SINGLE
+    ),
+    CalibrationStep("picker_red", "Point at the red number field", StepKind.SINGLE),
+    CalibrationStep("picker_green", "Point at the green number field", StepKind.SINGLE),
+    CalibrationStep("picker_blue", "Point at the blue number field", StepKind.SINGLE),
+    CalibrationStep("picker_preview", "Point at where the chosen colour is shown", StepKind.SINGLE),
+)
+
+# Nothing on any palette, so a preview still showing something else is a
+# binding that did not work rather than a coincidence.
+PICKER_TEST_COLOR: Final[Rgb] = (37, 149, 211)
+
+
+def apply_color(
+    surface: CalibrationSurface, picker: ColorPicker, color: Rgb, *, already_open: bool = False
+) -> None:
+    """Type one colour into the picker, exactly as the executor will.
+
+    The schedule in :mod:`penplan.budget` builds the same sequence as data. The
+    two are checked against each other in the tests, because a calibration that
+    proves one thing works while execution does another would be worse than no
+    check at all.
+
+    ``already_open`` exists because of the one asymmetry between the two. The
+    control that opens a picker usually toggles it, and at calibration time the
+    picker has to be open already: the fields cannot be pointed at otherwise.
+    Clicking it then would close the picker and send the rest of the sequence
+    to whatever was behind it. Execution starts from a closed picker and both
+    opens and closes it, so that no panel is left sitting over the canvas.
+    """
+    if not already_open:
+        surface.click(picker.open.x, picker.open.y)
+    for control, value in zip((picker.red, picker.green, picker.blue), color, strict=True):
+        surface.click(control.x, control.y)
+        surface.chord((VK_CONTROL, VK_A))
+        surface.type_text(str(value))
+    surface.chord((VK_TAB,))
+    surface.click(picker.open.x, picker.open.y)
+
+
+def bind_picker(
+    surface: CalibrationSurface, captures: dict[str, list[tuple[int, int]]]
+) -> ColorPicker:
+    """Build the picker from the captured points and prove that it works."""
+    picker = ColorPicker(
+        open=Control(*captures["picker_open"][0]),
+        red=Control(*captures["picker_red"][0]),
+        green=Control(*captures["picker_green"][0]),
+        blue=Control(*captures["picker_blue"][0]),
+        preview=Control(*captures["picker_preview"][0]),
+    )
+    apply_color(surface, picker, PICKER_TEST_COLOR, already_open=True)
+    time.sleep(_HOVER_SETTLE_SECONDS)
+    shown = surface.pixel(picker.preview.x, picker.preview.y)
+    if color_difference(shown, PICKER_TEST_COLOR) > MAX_SWATCH_DRIFT:
+        msg = (
+            f"the colour picker did not take: {PICKER_TEST_COLOR} was typed in and the "
+            f"preview reads {shown}. Check the three fields and the preview were captured "
+            "on the right controls"
+        )
+        raise ProfileError(msg)
+    return picker
+
+
 def zigzag(left: int, top: int) -> list[tuple[int, int]]:
     """Return the corners of a test zigzag, sharp enough that a miss shows."""
     return [
@@ -516,7 +599,8 @@ def calibrate(
     key at any point, leaving nothing written.
     """
     captures: dict[str, list[tuple[int, int]]] = {}
-    for step in SCRIPT:
+    script = (*SCRIPT, *PICKER_SCRIPT) if request.bind_picker else SCRIPT
+    for step in script:
         announce(step.prompt)
         if step.kind is StepKind.SINGLE:
             captures[step.key] = [_capture_single(surface)]
@@ -548,6 +632,11 @@ def calibrate(
         BrushControl(x=x, y=y, width=width, measured=measured)
         for (x, y), width in sorted(zip(controls, widths, strict=True), key=lambda pair: pair[1])
     )
+    picker = None
+    if request.bind_picker:
+        announce("Testing the colour picker, leave it open")
+        picker = bind_picker(surface, captures)
+
     profile = Profile(
         name=request.name,
         canvas=canvas,
@@ -561,6 +650,7 @@ def calibrate(
         cost=DEFAULT_COST_MODEL,
         pacing=pacing,
         created=timestamp(),
+        picker=picker,
     )
     # Always measured, never guessed: an estimate built on the defaults would be
     # arithmetic about somebody else's machine. This clicks swatches and tool
@@ -612,6 +702,14 @@ class WindowsSurface:
         self._pointer.move_to(x, y)
         self._pointer.press()
         self._pointer.release()
+
+    def type_text(self, text: str) -> None:
+        """Type a string into whatever has the keyboard focus."""
+        type_text(text)
+
+    def chord(self, keys: Sequence[int]) -> None:
+        """Press keys together and release them in the opposite order."""
+        press_keys(keys)
 
     def click(self, x: int, y: int) -> None:
         """Click once at a physical screen pixel."""

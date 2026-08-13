@@ -217,9 +217,9 @@ def apply_step(raster: Raster, step: Stroke | Fill, brush_widths: Sequence[float
     raster.paint_spans(raster.flood_spans(step.seed, blocked, visited), step.color)
 
 
-def render_plan(plan: DrawPlan, background: int) -> Image.Image:
+def render_plan(plan: DrawPlan) -> Image.Image:
     """Render a plan exactly as executing it would draw it."""
-    raster = Raster(plan.width, plan.height, background)
+    raster = Raster(plan.width, plan.height, plan.background)
     for step in plan.steps:
         apply_step(raster, step, plan.brush_widths)
     return raster.to_image(plan.palette)

@@ -160,6 +160,7 @@ def test_rendering_a_plan_draws_strokes_then_fills() -> None:
         width=9,
         height=9,
         palette=PALETTE,
+        background=WHITE,
         brush_widths=(1.0,),
         steps=(
             Stroke(
@@ -178,7 +179,7 @@ def test_rendering_a_plan_draws_strokes_then_fills() -> None:
             sacrifices=(),
         ),
     )
-    image = render_plan(plan, WHITE)
+    image = render_plan(plan)
     assert image.size == (9, 9)
     assert image.getpixel((4, 4)) == (255, 0, 0)
     assert image.getpixel((1, 1)) == (0, 0, 0)

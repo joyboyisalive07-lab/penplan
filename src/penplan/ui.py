@@ -26,8 +26,14 @@ from typing import TYPE_CHECKING, Final
 from PIL import Image
 
 from penplan.budget import PlanRequest, plan_within_budget, schedule
-from penplan.calibrate import verify_against_screen
+from penplan.calibrate import (
+    CalibrationRequest,
+    WindowsSurface,
+    calibrate,
+    verify_against_screen,
+)
 from penplan.input_win import (
+    AbortedError,
     AbortHotkey,
     ExecutionResult,
     Executor,
@@ -36,12 +42,12 @@ from penplan.input_win import (
     Pointer,
     ScreenPixels,
     accept_dropped_files,
+    cursor_position,
     dpi_scale_at,
     enable_dpi_awareness,
     virtual_screen,
 )
-from penplan.palette import Palette
-from penplan.profile import ProfileError, available_profiles
+from penplan.profile import ProfileError, available_profiles, user_profiles_dir
 from penplan.render import render_plan
 
 if TYPE_CHECKING:
@@ -64,6 +70,7 @@ TITLE: Final = ("Segoe UI Semibold", 13)
 # Consolas is monospaced, so a column of numbers stays a column while it
 # changes, which is the whole point of showing them live.
 NUMBER: Final = ("Consolas", 12)
+HEADLINE: Final = ("Consolas", 20)
 
 GAP: Final = 18
 PAD: Final = 14
@@ -72,7 +79,15 @@ PREVIEW_SIDE: Final = 380
 # Tall enough that every number and the button fit without scrolling, and
 # small enough to sit beside a browser rather than on top of it.
 WINDOW_WIDTH: Final = 1180
-WINDOW_HEIGHT: Final = 780
+WINDOW_HEIGHT: Final = 820
+
+STRIP_HEIGHT: Final = 84
+# A canvas that can be told a colour is not limited to its swatches, and this
+# is how many the planner may choose from the image itself.
+MIN_CHOSEN_COLORS: Final = 4
+MAX_CHOSEN_COLORS: Final = 24
+
+CALIBRATE_KEYS: Final = "F8 captures what the cursor is on, F9 finishes a list, Escape aborts"
 
 COUNTDOWN_SECONDS: Final = 3
 # Long enough for this window to actually be gone before the screen is read.
@@ -228,6 +243,72 @@ class PrimaryButton(tk.Canvas):
         )
 
 
+class SecondaryButton(tk.Canvas):
+    """An outlined button, for the things that are not the main thing."""
+
+    def __init__(self, parent: tk.Misc, *, text: str, command: Callable[[], None]) -> None:
+        super().__init__(
+            parent, width=CONTROL_WIDTH - 2 * PAD, height=34, bg=PANEL, highlightthickness=0
+        )
+        self._text = text
+        self._command = command
+        self.bind("<Button-1>", lambda _event: self._command())
+        self.bind("<Enter>", lambda _event: self._draw(hover=True))
+        self.bind("<Leave>", lambda _event: self._draw(hover=False))
+        self.bind("<Configure>", lambda _event: self._draw())
+        self._draw()
+
+    def relabel(self, text: str) -> None:
+        """Change the label."""
+        self._text = text
+        self._draw()
+
+    def _draw(self, *, hover: bool = False) -> None:
+        self.delete("all")
+        width = max(2, self.winfo_width())
+        edge = ACCENT if hover else EDGE
+        _rounded(self, (1, 1, width - 2, 32), 8, fill=PANEL, outline=edge)
+        self.create_text(width // 2, 17, text=self._text, fill=TEXT if hover else MUTED, font=BODY)
+
+
+class PromptStrip(tk.Toplevel):
+    """A line across the top of the screen, above every other window.
+
+    Calibration asks the user to point at a browser, and drawing takes over the
+    mouse; in both cases the thing worth reading is behind whatever is being
+    looked at. So it goes on top, undecorated, and never takes focus.
+    """
+
+    def __init__(self, parent: tk.Misc) -> None:
+        super().__init__(parent)
+        self.overrideredirect(boolean=True)
+        self.attributes("-topmost", True)  # noqa: FBT003
+        self.configure(bg=BACKGROUND)
+        self.geometry(f"{self.winfo_screenwidth()}x{STRIP_HEIGHT}+0+0")
+        self.message = tk.StringVar(value="")
+        self.hint = tk.StringVar(value="")
+        tk.Label(
+            self, textvariable=self.message, bg=BACKGROUND, fg=TEXT, font=("Segoe UI Semibold", 15)
+        ).pack(pady=(14, 2))
+        tk.Label(self, textvariable=self.hint, bg=BACKGROUND, fg=MUTED, font=SMALL).pack()
+        self._bar = tk.Canvas(self, height=3, bg=EDGE, highlightthickness=0)
+        self._bar.pack(side="bottom", fill="x")
+
+    def say(self, message: str, hint: str = "") -> None:
+        """Show a line and a hint, from any thread."""
+        self.after(0, self.message.set, message)
+        self.after(0, self.hint.set, hint)
+
+    def progress(self, done: int, total: int) -> None:
+        """Fill the bar along the bottom, from any thread."""
+        self.after(0, self._draw_progress, done, total)
+
+    def _draw_progress(self, done: int, total: int) -> None:
+        self._bar.delete("all")
+        width = self._bar.winfo_width()
+        self._bar.create_rectangle(0, 0, width * done / max(1, total), 4, fill=ACCENT, outline="")
+
+
 class ImagePane(tk.Canvas):
     """A panel that shows one image, scaled to fit, with a caption."""
 
@@ -274,6 +355,61 @@ def _as_photo(image: Image.Image) -> tk.PhotoImage:
     return tk.PhotoImage(data=base64.b64encode(buffer.getvalue()))
 
 
+class CalibrateDialog(tk.Toplevel):
+    """Asks the three things the wizard needs before it takes over the screen."""
+
+    def __init__(self, parent: tk.Misc) -> None:
+        super().__init__(parent)
+        self.title("Calibrate")
+        self.configure(bg=PANEL)
+        self.resizable(width=False, height=False)
+        self.transient(parent)
+        self.name: str | None = None
+        self.measure = True
+        self.picker = False
+
+        tk.Label(
+            self,
+            text="Arrange the canvas so everything is visible, then name the profile.",
+            bg=PANEL,
+            fg=MUTED,
+            font=SMALL,
+            wraplength=320,
+            justify="left",
+        ).pack(fill="x", padx=PAD, pady=(PAD, 6))
+        self._name = tk.Entry(
+            self, bg=BACKGROUND, fg=TEXT, insertbackground=ACCENT, font=BODY, relief="flat"
+        )
+        self._name.insert(0, "my-canvas")
+        self._name.pack(fill="x", padx=PAD, ipady=6)
+        self._name.focus_set()
+
+        self._measure = self._option("Measure brush widths and pacing", value=True)
+        self._picker = self._option("Bind a colour picker (R, G, B fields)", value=False)
+        PrimaryButton(self, text="Start", command=self._start).pack(
+            fill="x", padx=PAD, pady=(PAD, PAD)
+        )
+        self.bind("<Return>", lambda _event: self._start())
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _option(self, text: str, *, value: bool) -> Toggle:
+        row = tk.Frame(self, bg=PANEL)
+        row.pack(fill="x", padx=PAD, pady=(PAD, 0))
+        toggle = Toggle(row, on_change=lambda: None, value=value)
+        toggle.pack(side="left")
+        tk.Label(row, text=text, bg=PANEL, fg=TEXT, font=BODY).pack(side="left", padx=(10, 0))
+        return toggle
+
+    def _start(self) -> None:
+        name = self._name.get().strip()
+        if not name:
+            return
+        self.name = name
+        self.measure = self._measure.value
+        self.picker = self._picker.value
+        self.destroy()
+
+
 @dataclass(slots=True)
 class _Fields:
     """The live numbers, so the layout code and the update code stay apart."""
@@ -299,7 +435,9 @@ class App:
         self.pending: str | None = None
         self.planning = False
         self.drawing = False
+        self.calibrating = False
         self.overridden = False
+        self.strip: PromptStrip | None = None
 
         root.title("penplan")
         root.configure(bg=BACKGROUND)
@@ -344,12 +482,20 @@ class App:
         The process asks Windows for physical pixels so that calibration and
         the mouse agree, and the price is that Tk stops scaling itself. So the
         scale factor is applied here instead.
+
+        The window is placed in the middle of the screen rather than left where
+        Windows cascades it, which on a laptop puts the Draw button under the
+        taskbar.
         """
         enable_dpi_awareness()
         screen = virtual_screen()
         scale = dpi_scale_at(screen.left + screen.width // 2, screen.top + screen.height // 2)
         self.root.tk.call("tk", "scaling", scale * 96 / 72)
-        self.root.geometry(f"{int(WINDOW_WIDTH * scale)}x{int(WINDOW_HEIGHT * scale)}")
+        width = min(int(WINDOW_WIDTH * scale), screen.width)
+        height = min(int(WINDOW_HEIGHT * scale), screen.height)
+        left = screen.left + (screen.width - width) // 2
+        top = screen.top + (screen.height - height) // 3
+        self.root.geometry(f"{width}x{height}+{left}+{top}")
 
     def _build_controls(self) -> None:
         parent = self.controls
@@ -363,6 +509,7 @@ class App:
         menu = tk.OptionMenu(
             parent, self.profile_name, *names, command=lambda _value: self._schedule_replan()
         )
+        self.profile_menu = menu
         menu.configure(
             bg=BACKGROUND,
             fg=TEXT,
@@ -412,6 +559,9 @@ class App:
 
         self.dither = self._switch("Dither  (multiplies stroke count)", value=False)
         self.use_fills = self._switch("Use the fill tool", value=True)
+        self.use_picker = self._switch("Exact colours  (types them in)", value=False)
+        self.colors = Slider(parent, value=0.4, on_change=self._schedule_replan)
+        self.colors_label = tk.Label(parent, text="", bg=PANEL, fg=MUTED, font=SMALL, anchor="w")
 
         self.button = PrimaryButton(parent, text="Draw", command=self._start)
         tk.Label(
@@ -436,17 +586,32 @@ class App:
             wraplength=CONTROL_WIDTH - 2 * PAD,
         ).pack(side="bottom", fill="x", padx=PAD)
 
-        tk.Frame(parent, bg=EDGE, height=1).pack(fill="x", padx=PAD, pady=(PAD, 0))
-        self._readout("Estimated", self.fields.duration)
-        self._readout("Strokes", self.fields.strokes)
-        self._readout("Fills", self.fields.fills)
-        self._readout("Colours", self.fields.colors)
-        self._readout("Points", self.fields.points)
-        self._readout("Travel saved", self.fields.travel)
+        self.calibrate_button = SecondaryButton(
+            parent, text="Calibrate a canvas", command=self._calibrate
+        )
+        self.calibrate_button.pack(side="bottom", fill="x", padx=PAD, pady=(0, PAD))
+
+        self._build_readouts()
 
     def _label(self, text: str) -> None:
         tk.Label(self.controls, text=text, bg=PANEL, fg=MUTED, font=SMALL, anchor="w").pack(
             fill="x", padx=PAD, pady=(PAD, 0)
+        )
+
+    def _refresh_color_count(self) -> None:
+        """Show the colour count only when the profile can type colours."""
+        profile = self.profiles.get(self.profile_name.get())
+        if profile is None or profile.picker is None:
+            self.colors.pack_forget()
+            self.colors_label.pack_forget()
+            return
+        self.colors_label.configure(text=f"COLOURS  {self._color_count()}")
+        self.colors_label.pack(fill="x", padx=PAD, pady=(PAD, 0), before=self.button)
+        self.colors.pack(fill="x", padx=PAD, pady=(2, 0), before=self.button)
+
+    def _color_count(self) -> int:
+        return MIN_CHOSEN_COLORS + round(
+            self.colors.value * (MAX_CHOSEN_COLORS - MIN_CHOSEN_COLORS)
         )
 
     def _switch(self, text: str, *, value: bool) -> Toggle:
@@ -457,13 +622,41 @@ class App:
         tk.Label(row, text=text, bg=PANEL, fg=TEXT, font=BODY).pack(side="left", padx=(10, 0))
         return toggle
 
-    def _readout(self, name: str, variable: tk.StringVar) -> None:
-        row = tk.Frame(self.controls, bg=PANEL)
-        row.pack(fill="x", padx=PAD, pady=(6, 0))
-        tk.Label(row, text=name, bg=PANEL, fg=MUTED, font=SMALL, anchor="w").pack(side="left")
-        tk.Label(row, textvariable=variable, bg=PANEL, fg=TEXT, font=NUMBER, anchor="e").pack(
-            side="right"
+    def _build_readouts(self) -> None:
+        """Lay the numbers out under a headline estimate.
+
+        The estimate is the one number the whole tool exists to honour, so it
+        gets the headline. The rest go two to a line: six full-width rows did
+        not fit under the controls on a laptop screen, and the last two were
+        quietly cut off by the bottom of the panel.
+        """
+        parent = self.controls
+        tk.Frame(parent, bg=EDGE, height=1).pack(fill="x", padx=PAD, pady=(PAD, 0))
+        headline = tk.Frame(parent, bg=PANEL)
+        headline.pack(fill="x", padx=PAD, pady=(PAD, 0))
+        tk.Label(headline, text="ESTIMATED", bg=PANEL, fg=MUTED, font=SMALL).pack(
+            side="left", pady=(6, 0)
         )
+        tk.Label(
+            headline, textvariable=self.fields.duration, bg=PANEL, fg=ACCENT, font=HEADLINE
+        ).pack(side="right")
+
+        grid = tk.Frame(parent, bg=PANEL)
+        grid.pack(fill="x", padx=PAD, pady=(4, 0))
+        grid.grid_columnconfigure(0, weight=1, uniform="stat")
+        grid.grid_columnconfigure(1, weight=1, uniform="stat")
+        cells = (
+            ("STROKES", self.fields.strokes),
+            ("FILLS", self.fields.fills),
+            ("COLOURS", self.fields.colors),
+            ("POINTS", self.fields.points),
+            ("TRAVEL SAVED", self.fields.travel),
+        )
+        for index, (name, variable) in enumerate(cells):
+            cell = tk.Frame(grid, bg=PANEL)
+            cell.grid(row=index // 2, column=index % 2, sticky="ew", pady=(6, 0), padx=(0, 8))
+            tk.Label(cell, text=name, bg=PANEL, fg=MUTED, font=SMALL).pack(side="left")
+            tk.Label(cell, textvariable=variable, bg=PANEL, fg=TEXT, font=NUMBER).pack(side="right")
 
     def _install_drop(self) -> None:
         self.root.update_idletasks()
@@ -500,6 +693,7 @@ class App:
         self.source_pane.show(self.image, "Drop an image here, or click the panel on the right")
 
     def _schedule_replan(self) -> None:
+        self._refresh_color_count()
         if self.pending is not None:
             self.root.after_cancel(self.pending)
         self.pending = self.root.after(REPLAN_DELAY_MS, self._replan)
@@ -518,6 +712,7 @@ class App:
             return
         self.planning = True
         self.status.set("Planning")
+        wants_picker = self.use_picker.value and profile.picker is not None
         request = PlanRequest(
             image=self.image,
             profile=profile,
@@ -525,6 +720,8 @@ class App:
             detail=self.detail.value,
             dither=self.dither.value,
             use_fills=self.use_fills.value,
+            use_picker=wants_picker,
+            colors=self._color_count(),
         )
         threading.Thread(target=self._plan_worker, args=(request,), daemon=True).start()
 
@@ -534,8 +731,7 @@ class App:
         except (ProfileError, ValueError) as error:
             self.root.after(0, self._planning_failed, str(error))
             return
-        background = Palette(request.profile.colors).nearest(request.profile.background)
-        preview = render_plan(plan, background)
+        preview = render_plan(plan)
         self.root.after(0, self._planned, plan, preview)
 
     def _planning_failed(self, message: str) -> None:
@@ -635,7 +831,7 @@ class App:
             self.root.deiconify()
             self.drawing = False
             return
-        actions = schedule(plan.steps, (plan.width, plan.height), profile, profile.pacing)
+        actions = schedule(plan, profile, profile.pacing)
         self.hotkey = AbortHotkey()
         try:
             self.hotkey.start()
@@ -645,19 +841,26 @@ class App:
             self.status.set(str(error))
             self.button.configure_state(enabled=True, text="Draw")
             return
+        self.strip = PromptStrip(self.root)
+        self.strip.say("Drawing", "Escape stops it and gives the mouse back")
         threading.Thread(target=self._draw_worker, args=(actions,), daemon=True).start()
 
     def _draw_worker(self, actions: Sequence[Action]) -> None:
         if self.hotkey is None:
             return
+        strip = self.strip
+        progress = None if strip is None else strip.progress
         try:
-            result = Executor(Pointer(), self.hotkey).run(actions)
+            result = Executor(Pointer(), self.hotkey).run(actions, progress)
         except InputError as error:
             self.root.after(0, self._finished, None, str(error))
             return
         self.root.after(0, self._finished, result, "")
 
     def _finished(self, result: ExecutionResult | None, message: str) -> None:
+        if self.strip is not None:
+            self.strip.destroy()
+            self.strip = None
         if self.hotkey is not None:
             self.hotkey.stop()
             self.hotkey = None
@@ -671,9 +874,80 @@ class App:
         else:
             self.status.set(f"Done in {result.seconds:.1f} s")
         if self.plan is not None:
-            profile = self.profiles[self.profile_name.get()]
-            background = Palette(profile.colors).nearest(profile.background)
-            self.preview_pane.show(render_plan(self.plan, background))
+            self.preview_pane.show(render_plan(self.plan))
+
+    def _calibrate(self) -> None:
+        """Run the wizard from here, so a canvas can be learned without a terminal."""
+        if self.drawing or self.calibrating:
+            return
+        dialog = CalibrateDialog(self.root)
+        self.root.wait_window(dialog)
+        if dialog.name is None:
+            return
+        self.calibrating = True
+        self.calibrate_button.relabel("Calibrating")
+        self.strip = PromptStrip(self.root)
+        self.strip.say("Starting", "F8 captures, F9 finishes a list, Escape aborts")
+        self.root.iconify()
+        threading.Thread(
+            target=self._calibrate_worker,
+            args=(dialog.name, dialog.measure, dialog.picker),
+            daemon=True,
+        ).start()
+
+    def _calibrate_worker(self, name: str, measure: bool, picker: bool) -> None:  # noqa: FBT001
+        strip = self.strip
+        try:
+            with WindowsSurface() as surface:
+                request = CalibrationRequest(
+                    name=name,
+                    screen=surface.screen,
+                    dpi_scale=dpi_scale_at(*cursor_position()),
+                    measure_by_drawing=measure,
+                    bind_picker=picker,
+                )
+                profile = calibrate(
+                    request, surface, lambda message: strip.say(message, CALIBRATE_KEYS)
+                )
+        except AbortedError:
+            self.root.after(0, self._calibrated, None, "Calibration aborted, nothing written")
+            return
+        except (ProfileError, InputError) as error:
+            self.root.after(0, self._calibrated, None, str(error))
+            return
+        profile.save(user_profiles_dir() / f"{name}.json")
+        self.root.after(0, self._calibrated, profile, "")
+
+    def _calibrated(self, profile: Profile | None, problem: str) -> None:
+        if self.strip is not None:
+            self.strip.destroy()
+            self.strip = None
+        self.calibrating = False
+        self.root.deiconify()
+        self.calibrate_button.relabel("Calibrate a canvas")
+        if profile is None:
+            self.status.set(problem)
+            return
+        self.profiles = _load_profiles()
+        self._rebuild_profile_menu(profile.name)
+        widths = ", ".join(f"{width:.0f}" for width in profile.brush_widths)
+        picker = " and a colour picker" if profile.picker else ""
+        self.status.set(
+            f"Calibrated {profile.name}: {profile.canvas.width}x{profile.canvas.height}, "
+            f"{len(profile.palette)} colours, brushes {widths}{picker}"
+        )
+        self._schedule_replan()
+
+    def _rebuild_profile_menu(self, chosen: str) -> None:
+        menu = self.profile_menu["menu"]
+        menu.delete(0, "end")
+        for name in self.profiles or ["no profiles found"]:
+            menu.add_command(label=name, command=lambda value=name: self._choose_profile(value))
+        self.profile_name.set(chosen)
+
+    def _choose_profile(self, name: str) -> None:
+        self.profile_name.set(name)
+        self._schedule_replan()
 
     def _abort(self) -> None:
         if self.drawing and self.hotkey is not None:

@@ -33,6 +33,9 @@ _gdi32: Final = ctypes.WinDLL("gdi32", use_last_error=True)
 _kernel32: Final = ctypes.WinDLL("kernel32", use_last_error=True)
 
 INPUT_MOUSE: Final = 0
+INPUT_KEYBOARD: Final = 1
+KEYEVENTF_KEYUP: Final = 0x0002
+KEYEVENTF_UNICODE: Final = 0x0004
 MOUSEEVENTF_MOVE: Final = 0x0001
 MOUSEEVENTF_LEFTDOWN: Final = 0x0002
 MOUSEEVENTF_LEFTUP: Final = 0x0004
@@ -53,6 +56,9 @@ MOD_NOREPEAT: Final = 0x4000
 VK_ESCAPE: Final = 0x1B
 VK_F8: Final = 0x77
 VK_F9: Final = 0x78
+VK_TAB: Final = 0x09
+VK_CONTROL: Final = 0x11
+VK_A: Final = 0x41
 
 WM_DROPFILES: Final = 0x0233
 GWLP_WNDPROC: Final = -4
@@ -117,10 +123,24 @@ class _MouseInput(ctypes.Structure):
     )
 
 
+class _KeyboardInput(ctypes.Structure):
+    _fields_: Final = (
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.WPARAM),
+    )
+
+
+class _InputUnion(ctypes.Union):
+    # The hardware arm is not declared: nothing here sends one, and MOUSEINPUT
+    # is the largest of the three, so the size SendInput expects is unchanged.
+    _fields_: Final = (("mi", _MouseInput), ("ki", _KeyboardInput))
+
+
 class _Input(ctypes.Structure):
-    # Only the mouse arm of the INPUT union is declared. MOUSEINPUT is the
-    # largest arm, so the structure size still matches what SendInput expects.
-    _fields_: Final = (("type", wintypes.DWORD), ("mi", _MouseInput))
+    _fields_: Final = (("type", wintypes.DWORD), ("union", _InputUnion))
 
 
 _user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(_Input), ctypes.c_int)
@@ -309,8 +329,47 @@ def _last_error(call: str) -> str:
 def _mouse_event(flags: int, dx: int = 0, dy: int = 0) -> _Input:
     return _Input(
         type=INPUT_MOUSE,
-        mi=_MouseInput(dx=dx, dy=dy, mouseData=0, dwFlags=flags, time=0, dwExtraInfo=0),
+        union=_InputUnion(
+            mi=_MouseInput(dx=dx, dy=dy, mouseData=0, dwFlags=flags, time=0, dwExtraInfo=0)
+        ),
     )
+
+
+def _key_event(*, key: int = 0, character: str = "", release: bool = False) -> _Input:
+    """Build one keyboard event, either a virtual key or a literal character."""
+    flags = KEYEVENTF_KEYUP if release else 0
+    scan = 0
+    if character:
+        # Sent as a character rather than as a key, so that what arrives does
+        # not depend on the keyboard layout the user happens to have on.
+        flags |= KEYEVENTF_UNICODE
+        scan = ord(character)
+    return _Input(
+        type=INPUT_KEYBOARD,
+        union=_InputUnion(
+            ki=_KeyboardInput(wVk=key, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=0)
+        ),
+    )
+
+
+def type_text(text: str) -> None:
+    """Type a string as characters, whatever keyboard layout is active."""
+    if not text:
+        return
+    events: list[_Input] = []
+    for character in text:
+        events.append(_key_event(character=character))
+        events.append(_key_event(character=character, release=True))
+    _send(events)
+
+
+def press_keys(keys: Sequence[int]) -> None:
+    """Press keys together and release them in the opposite order."""
+    if not keys:
+        return
+    events = [_key_event(key=key) for key in keys]
+    events.extend(_key_event(key=key, release=True) for key in reversed(keys))
+    _send(events)
 
 
 def _send(events: Sequence[_Input]) -> None:
@@ -649,6 +708,10 @@ class Executor:
             self._pointer.press()
         elif action.kind is ActionKind.RELEASE:
             self._pointer.release()
+        elif action.kind is ActionKind.TYPE:
+            type_text(action.text)
+        elif action.kind is ActionKind.KEYS:
+            press_keys(action.keys)
         else:
             self._sleep(action.seconds)
 

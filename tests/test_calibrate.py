@@ -12,15 +12,18 @@ from dataclasses import replace
 
 import pytest
 
+from penplan.budget import picker_actions
 from penplan.calibrate import (
     ABORT_KEY,
     CAPTURE_KEY,
     NEXT_KEY,
     PACING_LADDER,
+    PICKER_TEST_COLOR,
     SCRIPT,
     CalibrationRequest,
     CalibrationStep,
     StepKind,
+    apply_color,
     calibrate,
     canvas_from_corners,
     fallback_brush_widths,
@@ -30,8 +33,8 @@ from penplan.calibrate import (
     zigzag,
 )
 from penplan.input_win import AbortedError
-from penplan.model import DEFAULT_COST_MODEL, DEFAULT_PACING, Rgb, ScreenRect
-from penplan.profile import BrushControl, Control, Profile, ProfileError, Swatch
+from penplan.model import DEFAULT_COST_MODEL, DEFAULT_PACING, ActionKind, Rgb, ScreenRect
+from penplan.profile import BrushControl, ColorPicker, Control, Profile, ProfileError, Swatch
 
 SCREEN = ScreenRect(left=0, top=0, width=1920, height=1080)
 BACKGROUND: Rgb = (255, 255, 255)
@@ -44,6 +47,11 @@ BRUSH_TOOL = (20, 40)
 FILL_TOOL = (20, 70)
 BRUSH_CONTROLS = ((60, 40), (60, 70), (60, 100))
 BRUSH_PAINTED_WIDTHS = {(60, 40): 3, (60, 70): 9, (60, 100): 21}
+
+PICKER_OPEN = (20, 200)
+PICKER_RED, PICKER_GREEN, PICKER_BLUE = (20, 230), (50, 230), (80, 230)
+PICKER_PREVIEW = (110, 230)
+PICKER_FIELDS = {PICKER_RED: 0, PICKER_GREEN: 1, PICKER_BLUE: 2}
 
 
 class FakeSurface:
@@ -67,6 +75,10 @@ class FakeSurface:
         self.clicks: list[tuple[int, int]] = []
         self.moves: list[tuple[int, int]] = []
         self.taps: list[tuple[int, int]] = []
+        self.typed: list[str] = []
+        self.chords: list[tuple[int, ...]] = []
+        self._focus: int | None = None
+        self._fields: dict[int, str] = {}
         self.parked: tuple[int, int] | None = None
         self.drags: list[list[tuple[int, int]]] = []
 
@@ -74,6 +86,9 @@ class FakeSurface:
         return self._cursor
 
     def pixel(self, x: int, y: int) -> Rgb:
+        if (x, y) == PICKER_PREVIEW:
+            channels = [int(self._fields.get(index, "0") or 0) for index in range(3)]
+            return (channels[0], channels[1], channels[2])
         if (x, y) in SWATCHES:
             return SWATCHES[(x, y)]
         if (x, y) in self._marks:
@@ -92,10 +107,19 @@ class FakeSurface:
     def tap(self, x: int, y: int) -> None:
         self.taps.append((x, y))
 
+    def type_text(self, text: str) -> None:
+        self.typed.append(text)
+        if self._focus is not None:
+            self._fields[self._focus] = text
+
+    def chord(self, keys: tuple[int, ...]) -> None:
+        self.chords.append(tuple(keys))
+
     def click(self, x: int, y: int) -> None:
         self.clicks.append((x, y))
         if (x, y) in self._paints:
             self._selected_width = self._paints[(x, y)]
+        self._focus = PICKER_FIELDS.get((x, y))
 
     def drag(self, points: list[tuple[int, int]], seconds_between: float) -> None:
         self.drags.append(list(points))
@@ -391,3 +415,86 @@ def test_a_canvas_off_this_screen_is_refused() -> None:
     result = verify_against_screen(profile, lambda x, y: colours[(x, y)], SCREEN)
     assert not result.ok
     assert "not on this screen" in result.complaints[0]
+
+
+def test_a_control_off_this_screen_is_refused() -> None:
+    profile = replace(profile_for_verification(), brush_tool=Control(x=4000, y=10))
+    colours = {(swatch.x, swatch.y): swatch.color for swatch in profile.palette}
+    result = verify_against_screen(profile, lambda x, y: colours[(x, y)], SCREEN)
+    assert not result.ok
+    assert "brush tool at 4000,10 is not on this screen" in result.complaints[0]
+
+
+def test_applying_a_colour_opens_the_picker_it_was_given_closed() -> None:
+    # Calibration binds a picker that is already open; execution starts from a
+    # closed one, so the same routine has to open it first.
+    surface = FakeSurface([])
+    picker = ColorPicker(
+        open=Control(x=10, y=900),
+        red=Control(x=10, y=940),
+        green=Control(x=40, y=940),
+        blue=Control(x=70, y=940),
+        preview=Control(x=10, y=900),
+    )
+    apply_color(surface, picker, (1, 2, 3))
+    assert surface.clicks[0] == (picker.open.x, picker.open.y)
+    assert surface.clicks[-1] == (picker.open.x, picker.open.y)
+
+
+def picker_script() -> list[tuple[int, tuple[int, int]]]:
+    return [
+        *full_script(),
+        (CAPTURE_KEY, PICKER_OPEN),
+        (CAPTURE_KEY, PICKER_RED),
+        (CAPTURE_KEY, PICKER_GREEN),
+        (CAPTURE_KEY, PICKER_BLUE),
+        (CAPTURE_KEY, PICKER_PREVIEW),
+    ]
+
+
+def test_a_picker_is_captured_and_proved_to_work() -> None:
+    surface = FakeSurface(picker_script())
+    request = CalibrationRequest(
+        name="fake", screen=SCREEN, dpi_scale=1.0, measure_by_drawing=False, bind_picker=True
+    )
+    result = calibrate(request, surface, silent)
+    assert result.picker is not None
+    assert (result.picker.red.x, result.picker.red.y) == PICKER_RED
+    # The wizard typed the test colour in and read it back off the screen.
+    assert surface.typed[-3:] == [str(value) for value in PICKER_TEST_COLOR]
+
+
+def test_a_picker_that_does_not_take_is_refused() -> None:
+    class Deaf(FakeSurface):
+        def type_text(self, text: str) -> None:
+            self.typed.append(text)
+
+    surface = Deaf(picker_script())
+    request = CalibrationRequest(
+        name="fake", screen=SCREEN, dpi_scale=1.0, measure_by_drawing=False, bind_picker=True
+    )
+    with pytest.raises(ProfileError, match="did not take"):
+        calibrate(request, surface, silent)
+
+
+def test_a_profile_without_a_picker_still_calibrates() -> None:
+    assert calibrate(request(), FakeSurface(full_script()), silent).picker is None
+
+
+def test_the_typed_sequence_matches_what_execution_will_send() -> None:
+    # Calibration proves the picker works by driving it; execution drives it
+    # from a schedule. If the two ever disagree, the proof proves nothing.
+    surface = FakeSurface(picker_script())
+    request = CalibrationRequest(
+        name="fake", screen=SCREEN, dpi_scale=1.0, measure_by_drawing=False, bind_picker=True
+    )
+    profile = calibrate(request, surface, silent)
+    assert profile.picker is not None
+    actions = picker_actions(profile.picker, DEFAULT_PACING, PICKER_TEST_COLOR)
+    clicked = [(action.x, action.y) for action in actions if action.kind is ActionKind.MOVE]
+    typed = [action.text for action in actions if action.kind is ActionKind.TYPE]
+    assert typed == [str(value) for value in PICKER_TEST_COLOR]
+    assert clicked[0] == PICKER_OPEN
+    assert clicked[-1] == PICKER_OPEN
+    for field in (PICKER_RED, PICKER_GREEN, PICKER_BLUE):
+        assert field in clicked

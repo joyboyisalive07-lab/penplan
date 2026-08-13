@@ -216,12 +216,20 @@ DEFAULT_PACING: Final = Pacing(
 
 
 class ActionKind(Enum):
-    """The four things the executor can do."""
+    """Everything the executor can do.
+
+    Typing exists for canvases that let a colour be entered as numbers. It is
+    the only way to reach a colour a palette does not contain, and numbers are
+    the one part of a colour picker that can be set exactly rather than aimed
+    at.
+    """
 
     MOVE = "move"
     PRESS = "press"
     RELEASE = "release"
     WAIT = "wait"
+    TYPE = "type"
+    KEYS = "keys"
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +245,8 @@ class Action:
     x: int = 0
     y: int = 0
     seconds: float = 0.0
+    text: str = ""
+    keys: tuple[int, ...] = ()
 
     @staticmethod
     def move(x: int, y: int) -> Action:
@@ -257,6 +267,16 @@ class Action:
     def wait(seconds: float) -> Action:
         """Return a pause."""
         return Action(kind=ActionKind.WAIT, seconds=seconds)
+
+    @staticmethod
+    def type_text(text: str) -> Action:
+        """Return typing a literal string."""
+        return Action(kind=ActionKind.TYPE, text=text)
+
+    @staticmethod
+    def chord(*pressed: int) -> Action:
+        """Return one chord, pressed together and released in reverse."""
+        return Action(kind=ActionKind.KEYS, keys=pressed)
 
 
 DEFAULT_COST_MODEL: Final = CostModel(
@@ -305,13 +325,17 @@ class PlanReport:
 class DrawPlan:
     """An ordered, self-contained description of a drawing.
 
-    The plan carries its own palette and brush widths so that the renderer and
-    the tests can reproduce the drawing without a calibration profile.
+    The plan carries its own palette, its background and its brush widths, so
+    that the renderer and the tests can reproduce the drawing without a
+    calibration profile. The palette is not always the profile's: when the
+    canvas offers a colour picker, the planner chooses colours from the image
+    instead of from the swatches on offer.
     """
 
     width: int
     height: int
     palette: tuple[Rgb, ...]
+    background: int
     brush_widths: tuple[float, ...]
     steps: tuple[Step, ...]
     report: PlanReport
@@ -326,6 +350,9 @@ class DrawPlan:
             raise ValueError(msg)
         if not self.brush_widths:
             msg = "a plan needs at least one brush width"
+            raise ValueError(msg)
+        if not 0 <= self.background < len(self.palette):
+            msg = f"background index {self.background} is outside the palette"
             raise ValueError(msg)
         for step in self.steps:
             if step.color >= len(self.palette):

@@ -29,8 +29,12 @@ takes a minute, and being told to recalibrate takes a second.
 
 ## Running the wizard
 
+The **Calibrate a canvas** button in the window is the whole wizard, and it asks
+for a name and for the two options below before it starts. From a source
+checkout the same thing runs from a terminal:
+
 ```bash
-python tools/calibrate.py gartic-phone --measure
+python tools/calibrate.py gartic-phone --measure --picker
 ```
 
 The name is the file name the profile is saved under, so pick something you
@@ -84,6 +88,32 @@ The mouse is also timed, with or without the flag: a few dozen moves and taps
 on the palette, which draw nothing. That is where the time estimates come from,
 and it is measured on your machine rather than assumed.
 
+## What `--picker` does
+
+Some canvases are not limited to their swatches: they have a colour picker with
+R, G and B boxes you can type numbers into. Binding one frees the planner from
+the palette entirely. Instead of matching the picture to the nearest crayon on
+offer, it chooses the colours of the picture itself and types them in.
+
+The wizard asks for five positions: the button that opens the picker, the R box,
+the G box, the B box, and a spot where the chosen colour is shown back to you.
+
+**Open the picker before you start this part, and leave it open.** The boxes do
+not exist while it is closed, so there would be nothing to point at.
+
+The binding is then tested rather than trusted. The wizard types one colour into
+the three boxes, reads the preview back off the screen, and refuses to save a
+picker that did not take. A wrong box would otherwise be found halfway through a
+drawing, in the form of a picture in the wrong colours.
+
+**Close the picker before you draw.** It sits over the canvas, and the tool
+opens it itself for every colour it needs.
+
+Once a profile has a picker, the window offers an **Exact colours** switch and a
+slider for how many colours to choose from the image. Typing a colour costs more
+than clicking a swatch, so the count is worth spending on the picture rather
+than on the palette: twelve chosen colours look better than eighteen given ones.
+
 ## Gartic Phone in particular
 
 - **Calibrate in a private lobby, in your own round.** The drawing screen only
@@ -107,6 +137,11 @@ and it is measured on your machine rather than assumed.
 - **The palette is larger than you need.** Twelve colours is plenty for most
   images, and each colour you leave out is a palette trip the planner never
   has to make.
+- **The colour picker** is the small square below the eighteen swatches. It
+  opens a panel with a hue wheel and R, G and B boxes, which is what `--picker`
+  binds. The eighteen swatches are saturated cartoon colours, so a photograph
+  drawn with them comes out grey and flat; typed colours are the difference
+  between a portrait and a smudge.
 
 The same applies to skribbl.io and drawaria.online. There is nothing about
 Gartic Phone in the code, and there is nothing about it in the profile beyond

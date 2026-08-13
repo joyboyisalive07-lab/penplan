@@ -22,6 +22,13 @@
   .swatch { width: 34px; height: 34px; border: 1px solid #2a3040; border-radius: 4px; cursor: pointer; }
   .swatch.on { outline: 2px solid #e3a04a; outline-offset: 1px; }
   canvas { background: #ffffff; border: 1px solid #2a3040; cursor: crosshair; touch-action: none; }
+  input[type=number] {
+    width: 34px; height: 30px; background: #191d25; color: #cfd4de;
+    border: 1px solid #2a3040; border-radius: 4px; text-align: center; font: inherit;
+    -moz-appearance: textfield;
+  }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 </style>
 </head>
 <body>
@@ -40,6 +47,18 @@
   <div class="group">
     <div class="label">COLOUR</div>
     <div class="row" id="palette"></div>
+  </div>
+  <div class="group">
+    <div class="label">CUSTOM COLOUR</div>
+    <div id="current" style="width:120px;height:34px;border:1px solid #2a3040;border-radius:4px;background:#000"></div>
+    <div id="picker" style="display:none;flex-direction:column;gap:6px">
+      <div class="row" style="gap:6px">
+        <input id="red" type="number" min="0" max="255" value="0">
+        <input id="green" type="number" min="0" max="255" value="0">
+        <input id="blue" type="number" min="0" max="255" value="0">
+      </div>
+      <div class="label" style="letter-spacing:0">R      G      B</div>
+    </div>
   </div>
   <div class="group">
     <div class="label">CANVAS</div>
@@ -88,11 +107,34 @@ COLOURS.forEach((value, index) => {
   swatch.style.background = value;
   swatch.onclick = () => {
     colour = value;
+    current.style.background = value;
     [...palette.children].forEach((other) => other.classList.remove("on"));
     swatch.classList.add("on");
   };
   palette.append(swatch);
 });
+
+const current = document.getElementById("current");
+const picker = document.getElementById("picker");
+const channels = ["red", "green", "blue"].map((id) => document.getElementById(id));
+
+current.onclick = () => {
+  picker.style.display = picker.style.display === "none" ? "flex" : "none";
+};
+
+function fromChannels() {
+  const parts = channels.map((input) => {
+    const value = Math.max(0, Math.min(255, parseInt(input.value, 10) || 0));
+    return value.toString(16).padStart(2, "0");
+  });
+  colour = "#" + parts.join("");
+  current.style.background = colour;
+  [...palette.children].forEach((other) => other.classList.remove("on"));
+}
+for (const input of channels) {
+  input.addEventListener("input", fromChannels);
+  input.addEventListener("change", fromChannels);
+}
 
 function selectTool(name) {
   tool = name;

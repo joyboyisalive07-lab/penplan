@@ -13,8 +13,9 @@ plans the strokes so the drawing finishes inside a time budget you set.
 ![Source, dry run, and the canvas it drew on](docs/img/comparison.png)
 
 The middle panel is the dry run, drawn before anything moves. The right one is
-a screenshot of the canvas afterwards. The plan behind them was estimated at
-10.0 seconds and took 10.1 to execute.
+a screenshot of the canvas afterwards, drawn in the picture's own colours typed
+into the canvas's colour picker. The plan behind them was estimated at 94.0
+seconds and took 95.8 to execute.
 
 The tool knows nothing about any particular site. It learns a canvas from a
 calibration profile: where the canvas is, what colours the palette actually
@@ -74,7 +75,7 @@ All measured, all reproducible from the tests and the tools in this repository.
 
 | | |
 | --- | --- |
-| An estimate against the same drawing actually executed | 10.0 s planned, 10.1 s real |
+| An estimate against the same drawing actually executed | 10.0 s planned, 10.1 s real; 94.0 s planned, 95.8 s real |
 | Brush widths measured from test strokes | 2.0, 6.0, 14.0, 28.0 against a page defining 2, 6, 14, 28 |
 | CIEDE2000 against the 29 published Sharma pairs | agrees to 1e-4 |
 | Planning a 600x450 drawing of five shapes | 0.12 s, 5 fills, 65 strokes, 161 points |
@@ -83,7 +84,7 @@ All measured, all reproducible from the tests and the tools in this repository.
 | Mouse travel, ordered against as-planned | 52 to 87 per cent shorter |
 | Improvement passes against full 2-opt, 200 strokes | 16955 in 0.26 s against 16754 in 0.64 s |
 | A 20.5 s drawing given a 15 s budget | 9.0 s after four sacrifices |
-| Statement coverage of the planning modules | 95.1 per cent |
+| Statement coverage of the planning modules | 95.4 per cent |
 
 ## Calibrating a canvas
 
@@ -97,10 +98,11 @@ window, and arrange it so the canvas, the colours, both tools and the brush
 sizes are visible at once. Do not scroll the page after this: scrolling moves
 the canvas out from under every coordinate you are about to capture.
 
-**Then** run the wizard, naming the profile whatever you will recognise:
+**Then** press **Calibrate a canvas** in the window and give the profile a name
+you will recognise. From a source checkout the same wizard runs from a terminal:
 
 ```bash
-python tools/calibrate.py gartic-phone --measure
+python tools/calibrate.py gartic-phone --measure --picker
 ```
 
 A strip appears across the top of the screen with the current instruction, so
@@ -122,10 +124,21 @@ halfway through. The colours are read afterwards, with the cursor parked in the
 middle of the canvas, because a swatch under the pointer is drawn in a hover
 state on most sites and that highlight would be recorded as the colour.
 
-`--measure` draws a test stroke per brush size and a zigzag on the canvas, which
-is how the planner learns what each brush actually paints and how fast the
-canvas can be fed. **Clear the canvas afterwards.** Without the flag the widths
-are a plausible guess, and the profile records which of the two you have.
+**Measure the brushes** if you are asked. It draws a test stroke per brush size
+and a zigzag on the canvas, which is how the planner learns what each brush
+actually paints and how fast the canvas can be fed. **Clear the canvas
+afterwards.** Without it the widths are a plausible guess, and the profile
+records which of the two you have.
+
+**Bind the colour picker** if the canvas has one: a button that opens R, G and B
+boxes you can type numbers into. Open it before this step and leave it open,
+because the boxes do not exist while it is closed, and close it again before you
+draw. The wizard asks for the button, the three boxes and the spot that shows
+the chosen colour, then types a test colour and reads it back rather than
+trusting that it landed. A canvas with a bound picker is not limited to its
+swatches: the **Exact colours** switch in the window makes the planner choose
+the colours of your picture and type them in, which is the difference between a
+portrait and a grey smudge.
 
 The profile lands in `%APPDATA%\penplan\profiles\` as readable JSON.
 
@@ -165,7 +178,9 @@ canvas, and the two failures worth knowing apart are these.
 
 **The palette cannot express the picture.** A desaturated photograph on an
 eighteen colour palette of saturated crayons comes out grey, and no planner can
-help. Flat, high contrast pictures with few colours are what this does well.
+help. Either give it flat, high contrast pictures with few colours, or bind the
+canvas's colour picker and turn **Exact colours** on, which drops the swatches
+and types the picture's own colours instead.
 
 **The budget had to cut something.** More detail is not free: a finer raster
 finds more regions, and if the seconds do not move with it the ladder starts

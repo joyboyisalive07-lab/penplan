@@ -28,7 +28,10 @@ import math
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
+from PIL import Image
+
 from penplan.fills import plan_fills
+from penplan.input_win import VK_A, VK_CONTROL, VK_TAB
 from penplan.model import (
     Action,
     ActionKind,
@@ -49,10 +52,8 @@ from penplan.tour import plan_tour
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from PIL import Image
-
-    from penplan.model import CostModel, Pacing, Step
-    from penplan.profile import Profile
+    from penplan.model import CostModel, Pacing, Rgb
+    from penplan.profile import ColorPicker, Profile
     from penplan.quantize import QuantizedImage
 
 # The plan raster at full detail, as a fraction of the canvas. Drawing one plan
@@ -60,6 +61,10 @@ if TYPE_CHECKING:
 # and it makes every planning pass cost several times more for nothing.
 MAX_DETAIL_FRACTION: Final = 0.5
 MIN_RASTER_SIDE: Final = 32
+
+# A brush thinner than one plan pixel would let the coverage pass leave gaps it
+# can never close, so the thinnest brush is worth at least the pixel it aims at.
+MIN_RASTER_BRUSH_WIDTH: Final = 1.0
 
 DEFAULT_TOLERANCE: Final = 1.0
 DEFAULT_MIN_REGION_AREA: Final = 2
@@ -97,6 +102,12 @@ class PlanRequest:
     detail: float = 1.0
     dither: bool = False
     use_fills: bool = True
+    use_picker: bool = False
+    """Choose colours from the image and type them, rather than using swatches."""
+
+    colors: int = 12
+    """How many colours to choose from the image, when the picker is used."""
+
     tour_seconds: float = DEFAULT_TOUR_SECONDS
 
 
@@ -133,6 +144,20 @@ def raster_size(profile: Profile, detail: float) -> tuple[int, int]:
     )
 
 
+def raster_brush_widths(profile: Profile, raster_width: int) -> tuple[float, ...]:
+    """Return the profile's brush widths measured in plan pixels.
+
+    The profile measures a brush in screen pixels, because that is what the
+    calibration saw. The plan is a small raster that gets stretched over the
+    canvas, so a 2-pixel brush on an 800-pixel canvas covers half a pixel of a
+    200-pixel plan, not two. Handing the screen numbers straight to the coverage
+    pass makes it believe each stroke paints four times the width it really
+    does, and the drawing comes out as hatching with the paper showing through.
+    """
+    scale = raster_width / profile.canvas.width
+    return tuple(max(MIN_RASTER_BRUSH_WIDTH, width * scale) for width in profile.brush_widths)
+
+
 def initial_settings(request: PlanRequest) -> Settings:
     """Return the settings a plan starts from, before any degradation."""
     width, height = raster_size(request.profile, request.detail)
@@ -142,7 +167,9 @@ def initial_settings(request: PlanRequest) -> Settings:
         min_region_area=DEFAULT_MIN_REGION_AREA,
         tolerance=DEFAULT_TOLERANCE,
         lowest_brush=0,
-        palette_size=len(request.profile.palette),
+        palette_size=request.colors
+        if request.use_picker and request.profile.picker is not None
+        else len(request.profile.palette),
         dither=request.dither,
         use_fills=request.use_fills,
     )
@@ -159,9 +186,46 @@ def _click_at(x: int, y: int, pacing: Pacing) -> list[Action]:
     ]
 
 
-def schedule(
-    steps: Sequence[Step], raster: tuple[int, int], profile: Profile, pacing: Pacing
-) -> list[Action]:
+def picker_actions(picker: ColorPicker, pacing: Pacing, color: Rgb) -> list[Action]:
+    """Return the actions that type one colour into a picker.
+
+    Opened, filled in, and closed again. Closing matters: a picker panel left
+    open can sit over the canvas, and a stroke drawn onto a panel is a stroke
+    that never reaches the picture. It costs one click and removes the question.
+
+    Each field is clicked, selected whole, and overwritten, rather than trusting
+    that it was empty or that the caret landed anywhere in particular.
+    """
+    actions = _click_at(picker.open.x, picker.open.y, pacing)
+    for control, value in zip((picker.red, picker.green, picker.blue), color, strict=True):
+        actions.extend(_click_at(control.x, control.y, pacing))
+        actions.append(Action.chord(VK_CONTROL, VK_A))
+        actions.append(Action.wait(pacing.settle_seconds))
+        actions.append(Action.type_text(str(value)))
+        actions.append(Action.wait(pacing.settle_seconds))
+    # Leaving the last field commits it on canvases that only apply on blur.
+    actions.append(Action.chord(VK_TAB))
+    actions.append(Action.wait(pacing.settle_seconds))
+    actions.extend(_click_at(picker.open.x, picker.open.y, pacing))
+    return actions
+
+
+def select_color(profile: Profile, pacing: Pacing, color: Rgb) -> list[Action]:
+    """Return the actions that make ``color`` the one being drawn with.
+
+    A colour the palette already has is one click. Anything else is typed into
+    the picker, which is the only way to draw a colour a canvas does not offer.
+    """
+    for swatch in profile.palette:
+        if swatch.color == color:
+            return _click_at(swatch.x, swatch.y, pacing)
+    if profile.picker is None:
+        msg = f"{color} is not in the palette and this profile has no colour picker"
+        raise ValueError(msg)
+    return picker_actions(profile.picker, pacing, color)
+
+
+def schedule(plan: DrawPlan, profile: Profile, pacing: Pacing) -> list[Action]:
     """Turn a plan into the exact sequence of things the mouse will do.
 
     This is the one description of an execution. The estimate is the duration
@@ -170,13 +234,20 @@ def schedule(
 
     Selections are emitted only when they change, and always for the first
     step, because nothing is known about what the canvas had selected before.
+
+    It takes the whole plan rather than its parts on purpose. An earlier version
+    took the steps and let the palette default to the profile's, and a caller
+    that forgot to pass the plan's palette got a drawing in whatever colours
+    happened to sit at those indices on the site. It looked like a bug in the
+    colour picker for an hour.
     """
-    width, height = raster
+    width, height = plan.width, plan.height
+    colors = plan.palette
     actions: list[Action] = []
     color: int | None = None
     brush: int | None = None
     filling: bool | None = None
-    for step in steps:
+    for step in plan.steps:
         is_fill = isinstance(step, Fill)
         if filling is not is_fill:
             control = profile.fill_tool if is_fill else profile.brush_tool
@@ -186,8 +257,7 @@ def schedule(
             # tool, so the next stroke reselects it.
             brush = None
         if color != step.color:
-            swatch = profile.palette[step.color]
-            actions.extend(_click_at(swatch.x, swatch.y, pacing))
+            actions.extend(select_color(profile, pacing, colors[step.color]))
             color = step.color
         if isinstance(step, Stroke):
             if brush != step.brush:
@@ -235,6 +305,12 @@ def schedule_seconds(actions: Sequence[Action], cost: CostModel) -> float:
             if position is not None:
                 total += math.dist(position, (action.x, action.y)) * cost.seconds_per_pixel
             position = (action.x, action.y)
+        elif action.kind is ActionKind.TYPE:
+            # A keystroke is an event like any other, and there is one of them
+            # per character, twice over for the press and the release.
+            total += len(action.text) * cost.seconds_per_move
+        elif action.kind is ActionKind.KEYS:
+            total += cost.seconds_per_move
         else:
             total += cost.seconds_per_click / 2.0
     return total
@@ -250,17 +326,42 @@ def _kept_colors(image: QuantizedImage, keep: int, background: int) -> list[int]
     return sorted({background, *chosen})
 
 
-def _quantize_to_profile(request: PlanRequest, settings: Settings) -> tuple[QuantizedImage, int]:
-    """Quantize onto the profile palette, honouring any palette reduction.
+def _image_palette(source: Image.Image, size: int, background: Rgb) -> tuple[Rgb, ...]:
+    """Choose the colours of the image itself, with the background kept.
 
-    The result always speaks in the profile's own palette indices, because the
-    executor clicks swatches by where they sit on screen.
+    A canvas with a colour picker is not limited to its swatches, so neither is
+    the planner: median cut over the image gives colours that belong to the
+    picture rather than the nearest crayon to them. The background is forced in
+    because everything already that colour is work the planner gets to skip.
+    """
+    reduced = source.quantize(
+        colors=max(2, size), method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE
+    )
+    flat = reduced.getpalette() or []
+    entries = [
+        (flat[offset], flat[offset + 1], flat[offset + 2]) for offset in range(0, len(flat), 3)
+    ]
+    chosen = [entries[index] for index in sorted(set(reduced.tobytes()))]
+    return tuple(dict.fromkeys([background, *chosen]))[:size]
+
+
+def _prepare_target(request: PlanRequest, settings: Settings) -> tuple[QuantizedImage, int]:
+    """Quantize the image onto the colours this plan is allowed to use.
+
+    Without a picker those are the profile's swatches, and the result speaks in
+    the profile's own indices because the executor clicks swatches by position.
+    With one, they are the image's own colours and the executor types them.
     """
     profile = request.profile
-    full = Palette(profile.colors)
     source = prepare_source(
         request.image, settings.raster_width, settings.raster_height, profile.background
     )
+    if request.use_picker and profile.picker is not None:
+        palette = Palette(_image_palette(source, settings.palette_size, profile.background))
+        target = quantize(source, palette, dither=settings.dither)
+        return target, palette.nearest(profile.background)
+
+    full = Palette(profile.colors)
     target = quantize(source, full, dither=settings.dither)
     background = full.nearest(profile.background)
     if settings.palette_size >= len(profile.palette):
@@ -276,6 +377,21 @@ def _quantize_to_profile(request: PlanRequest, settings: Settings) -> tuple[Quan
     )
 
 
+def _color_switch_seconds(profile: Profile, colors: Sequence[Rgb]) -> float:
+    """Return what changing colour costs, measured on the actual selections.
+
+    A swatch is a click. A typed colour is a click, three fields, three
+    selections, three numbers and a click to close, which is an order of
+    magnitude more, and the tour has to know that or it will happily switch
+    back and forth between colours it should have finished with.
+    """
+    worst = profile.cost.seconds_per_color_switch
+    for color in colors:
+        actions = select_color(profile, profile.pacing, color)
+        worst = max(worst, schedule_seconds(actions, profile.cost))
+    return worst
+
+
 def build_plan(request: PlanRequest, settings: Settings) -> tuple[DrawPlan, float]:
     """Build one plan at the given settings, and return it with its estimate.
 
@@ -285,18 +401,19 @@ def build_plan(request: PlanRequest, settings: Settings) -> tuple[DrawPlan, floa
     ordered.
     """
     profile = request.profile
-    target, background = _quantize_to_profile(request, settings)
+    target, background = _prepare_target(request, settings)
+    widths = raster_brush_widths(profile, target.width)
     regions = decompose(target, ignore=[background], min_area=settings.min_region_area).regions
     canvas = Raster(target.width, target.height, background)
     outlines = outline_strokes(regions, target.height, settings.lowest_brush, settings.tolerance)
-    thinnest = profile.brush_widths[settings.lowest_brush]
+    thinnest = widths[settings.lowest_brush]
     for stroke in outlines:
         canvas.stroke(stroke.points, stroke.color, thinnest)
     fills = plan_fills(canvas, regions, background=background).fills if settings.use_fills else ()
     interior = cover(
         canvas,
         target,
-        profile.brush_widths,
+        widths,
         ignore=[background],
         tolerance=settings.tolerance,
         lowest_brush=settings.lowest_brush,
@@ -304,24 +421,22 @@ def build_plan(request: PlanRequest, settings: Settings) -> tuple[DrawPlan, floa
     # The tour works in canvas pixels, so the switching costs are expressed as
     # the distance the mouse could have covered in the same time.
     per_pixel = max(profile.cost.seconds_per_pixel, _MIN_PIXEL_SECONDS)
+    switch_seconds = _color_switch_seconds(profile, target.colors)
     tour = plan_tour(
         [list(outlines), list(fills), interior],
-        color_switch_cost=profile.cost.seconds_per_color_switch / per_pixel,
+        color_switch_cost=switch_seconds / per_pixel,
         brush_switch_cost=profile.cost.seconds_per_tool_switch / per_pixel,
         time_limit=request.tour_seconds,
-    )
-    estimate = schedule_seconds(
-        schedule(tour.steps, (target.width, target.height), profile, profile.pacing),
-        profile.cost,
     )
     plan = DrawPlan(
         width=target.width,
         height=target.height,
-        palette=profile.colors,
-        brush_widths=profile.brush_widths,
+        palette=target.colors,
+        background=background,
+        brush_widths=widths,
         steps=tour.steps,
         report=PlanReport(
-            estimated_seconds=estimate,
+            estimated_seconds=0.0,
             budget_seconds=request.budget_seconds,
             travel=tour.travel,
             greedy_travel=tour.greedy_travel,
@@ -329,7 +444,11 @@ def build_plan(request: PlanRequest, settings: Settings) -> tuple[DrawPlan, floa
             sacrifices=(),
         ),
     )
-    return plan, estimate
+    # The estimate is what the plan's own schedule costs, so the number quoted to
+    # the user and the actions performed for them can never come from different
+    # palettes.
+    estimate = schedule_seconds(schedule(plan, profile, profile.pacing), profile.cost)
+    return replace(plan, report=replace(plan.report, estimated_seconds=estimate)), estimate
 
 
 def plan_within_budget(request: PlanRequest) -> DrawPlan:

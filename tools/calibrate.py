@@ -23,47 +23,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from penplan.calibrate import CalibrationRequest, WindowsSurface, calibrate
 from penplan.input_win import AbortedError, cursor_position, dpi_scale_at, enable_dpi_awareness
 from penplan.profile import Profile, ProfileError, user_profiles_dir
+from penplan.ui import PromptStrip
 
-BACKGROUND = "#12141a"
-TEXT = "#e7eaf0"
-ACCENT = "#e3a04a"
-MUTED = "#868fa2"
-STRIP_HEIGHT = 92
+PROMPT_KEYS = "F8 captures what the cursor is on    F9 finishes a list    Escape aborts"
 
 
-class Prompt:
-    """A strip across the top of the screen that says what to point at."""
-
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        root.overrideredirect(boolean=True)
-        root.attributes("-topmost", True)  # noqa: FBT003
-        width = root.winfo_screenwidth()
-        root.geometry(f"{width}x{STRIP_HEIGHT}+0+0")
-        root.configure(bg=BACKGROUND)
-        self.message = tk.StringVar(value="Starting")
-        tk.Label(
-            root,
-            textvariable=self.message,
-            bg=BACKGROUND,
-            fg=TEXT,
-            font=("Segoe UI Semibold", 15),
-        ).pack(pady=(16, 2))
-        tk.Label(
-            root,
-            text="F8 captures what the cursor is on    F9 finishes a list    Escape aborts",
-            bg=BACKGROUND,
-            fg=MUTED,
-            font=("Segoe UI", 10),
-        ).pack()
-        tk.Frame(root, bg=ACCENT, height=2).pack(side="bottom", fill="x")
-
-    def say(self, message: str) -> None:
-        """Show a line, from any thread."""
-        self.root.after(0, self.message.set, message)
-
-
-def run(name: str, *, measure: bool, prompt: Prompt) -> tuple[Profile | None, str]:
+def run(
+    name: str, *, measure: bool, picker: bool, prompt: PromptStrip
+) -> tuple[Profile | None, str]:
     """Run the wizard on this thread and return the profile or the reason there is none."""
     with WindowsSurface() as surface:
         request = CalibrationRequest(
@@ -71,9 +38,10 @@ def run(name: str, *, measure: bool, prompt: Prompt) -> tuple[Profile | None, st
             screen=surface.screen,
             dpi_scale=dpi_scale_at(*cursor_position()),
             measure_by_drawing=measure,
+            bind_picker=picker,
         )
         try:
-            return calibrate(request, surface, prompt.say), ""
+            return calibrate(request, surface, lambda message: prompt.say(message, PROMPT_KEYS)), ""
         except AbortedError:
             return None, "aborted, nothing was written"
         except ProfileError as error:
@@ -90,17 +58,31 @@ def main() -> int:
         help="draw test strokes to measure brush widths and pacing; this writes on the canvas",
     )
     parser.add_argument(
+        "--picker",
+        action="store_true",
+        help="also bind a colour picker, for canvases with R, G and B fields",
+    )
+    parser.add_argument(
         "--output", type=Path, default=None, help="where to write, defaults to the user profile dir"
     )
     arguments = parser.parse_args()
 
     enable_dpi_awareness()
     root = tk.Tk()
-    prompt = Prompt(root)
+    root.withdraw()
+    prompt = PromptStrip(root)
+    prompt.say("Starting", PROMPT_KEYS)
     outcome: list[tuple[Profile | None, str]] = []
 
     def worker() -> None:
-        outcome.append(run(arguments.name, measure=arguments.measure, prompt=prompt))
+        outcome.append(
+            run(
+                arguments.name,
+                measure=arguments.measure,
+                picker=arguments.picker,
+                prompt=prompt,
+            )
+        )
         root.after(0, root.destroy)
 
     threading.Thread(target=worker, daemon=True).start()
@@ -119,6 +101,8 @@ def main() -> int:
     measured = "measured" if profile.brushes[0].measured else "estimated"
     print(f"brush widths {widths} ({measured})")
     print(f"pacing {profile.pacing.point_seconds * 1000:.0f} ms between stroke points")
+    if profile.picker is not None:
+        print("colour picker bound and tested")
     if arguments.measure:
         print("clear the canvas: the test strokes are still on it")
     return 0

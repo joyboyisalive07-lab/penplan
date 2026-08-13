@@ -13,21 +13,30 @@ from penplan.budget import (
     build_plan,
     initial_settings,
     plan_within_budget,
+    raster_brush_widths,
     raster_size,
     schedule,
     schedule_seconds,
+    select_color,
 )
 from penplan.model import (
+    Action,
     ActionKind,
     CostModel,
     Degradation,
+    DrawPlan,
     Fill,
     Pacing,
+    PlanReport,
     Point,
+    Rgb,
     ScreenRect,
     Stroke,
 )
-from penplan.profile import BrushControl, Control, Profile, Swatch
+from penplan.palette import Palette
+from penplan.profile import BrushControl, ColorPicker, Control, Profile, Swatch
+from penplan.quantize import prepare_source, quantize
+from penplan.render import Raster, apply_step
 
 COLORS = (
     (255, 255, 255),
@@ -87,6 +96,26 @@ def shapes(size: tuple[int, int] = (600, 450)) -> Image.Image:
     return image
 
 
+def make_plan(steps: list[Stroke | Fill], palette: tuple[Rgb, ...] = COLORS) -> DrawPlan:
+    """Wrap steps in the smallest plan the schedule will accept."""
+    return DrawPlan(
+        width=32,
+        height=32,
+        palette=palette,
+        background=0,
+        brush_widths=(1.0, 5.0, 13.0),
+        steps=tuple(steps),
+        report=PlanReport(
+            estimated_seconds=0.0,
+            budget_seconds=60.0,
+            travel=0.0,
+            greedy_travel=0.0,
+            arrival_travel=0.0,
+            sacrifices=(),
+        ),
+    )
+
+
 def request(budget: float, **overrides: object) -> PlanRequest:
     fields: dict[str, object] = {
         "image": shapes(),
@@ -101,7 +130,7 @@ def request(budget: float, **overrides: object) -> PlanRequest:
 
 def test_a_schedule_selects_the_tool_the_colour_and_the_brush_first() -> None:
     steps = [Stroke(color=2, brush=1, points=(Point(0, 0), Point(4, 0)))]
-    actions = schedule(steps, (32, 32), make_profile(), PACING)
+    actions = schedule(make_plan(steps), make_profile(), PACING)
     moves = [action for action in actions if action.kind is ActionKind.MOVE]
     profile = make_profile()
     assert (moves[0].x, moves[0].y) == (profile.brush_tool.x, profile.brush_tool.y)
@@ -118,8 +147,8 @@ def test_a_schedule_only_reselects_what_changed() -> None:
         same[0],
         Stroke(color=3, brush=1, points=(Point(8, 8), Point(9, 9))),
     ]
-    assert len(schedule(different, (32, 32), make_profile(), PACING)) > len(
-        schedule(same, (32, 32), make_profile(), PACING)
+    assert len(schedule(make_plan(different), make_profile(), PACING)) > len(
+        schedule(make_plan(same), make_profile(), PACING)
     )
 
 
@@ -129,8 +158,8 @@ def test_a_stroke_costs_a_point_at_a_time() -> None:
         Stroke(color=0, brush=0, points=(Point(0, 0), Point(4, 0), Point(8, 0), Point(12, 0)))
     ]
     extra = schedule_seconds(
-        schedule(long_stroke, (32, 32), make_profile(), PACING), COST
-    ) - schedule_seconds(schedule(short, (32, 32), make_profile(), PACING), COST)
+        schedule(make_plan(long_stroke), make_profile(), PACING), COST
+    ) - schedule_seconds(schedule(make_plan(short), make_profile(), PACING), COST)
     # Two further points, each a move and a pacing wait.
     assert extra == pytest.approx(2 * (COST.seconds_per_move + PACING.point_seconds))
 
@@ -143,15 +172,15 @@ def test_a_fill_costs_the_tool_switches_around_it() -> None:
     with_fill = [strokes[0], Fill(color=0, seed=Point(5, 5)), strokes[1]]
     profile = make_profile()
     added = schedule_seconds(
-        schedule(with_fill, (32, 32), profile, PACING), COST
-    ) - schedule_seconds(schedule(strokes, (32, 32), profile, PACING), COST)
+        schedule(make_plan(with_fill), profile, PACING), COST
+    ) - schedule_seconds(schedule(make_plan(strokes), profile, PACING), COST)
     # Two strokes alone need the brush tool, the colour, the brush size and one
     # press each: five. Putting a fill between them adds the switch to the fill
     # tool, the fill click itself, the switch back, and the brush size that a
     # tool change is assumed to have lost: nine.
     clicks = [
         action
-        for action in schedule(with_fill, (32, 32), profile, PACING)
+        for action in schedule(make_plan(with_fill), profile, PACING)
         if action.kind is ActionKind.PRESS
     ]
     assert len(clicks) == 9
@@ -160,7 +189,7 @@ def test_a_fill_costs_the_tool_switches_around_it() -> None:
 
 def test_an_empty_plan_takes_no_time() -> None:
     assert schedule_seconds([], COST) == 0.0
-    assert schedule([], (32, 32), make_profile(), PACING) == []
+    assert schedule(make_plan([]), make_profile(), PACING) == []
 
 
 def test_the_raster_follows_the_detail_setting() -> None:
@@ -173,6 +202,42 @@ def test_the_raster_follows_the_detail_setting() -> None:
 
 def test_the_raster_never_collapses() -> None:
     assert raster_size(make_profile(), 0.0)[0] >= 32
+
+
+def test_brush_widths_are_converted_into_plan_pixels() -> None:
+    # The canvas is 600 wide, so a 300-wide plan gets half the screen width.
+    profile = make_profile()
+    assert raster_brush_widths(profile, 300) == (1.0, 2.5, 6.5)
+
+
+def test_a_brush_is_never_thinner_than_the_pixel_it_aims_at() -> None:
+    profile = make_profile()
+    assert min(raster_brush_widths(profile, 32)) >= 1.0
+
+
+def test_the_plan_carries_the_widths_it_was_planned_with() -> None:
+    settings = initial_settings(request(60.0))
+    plan, _ = build_plan(request(60.0), settings)
+    assert plan.brush_widths == raster_brush_widths(make_profile(), settings.raster_width)
+
+
+def test_strokes_cover_the_picture_rather_than_hatching_it() -> None:
+    # Widths in the wrong unit make the coverage pass believe each stroke paints
+    # several plan pixels when it paints one, and the drawing comes out as
+    # hatching with the paper showing through between the lines.
+    plan = plan_within_budget(request(600.0))
+    drawn = Raster(plan.width, plan.height, plan.background)
+    for step in plan.steps:
+        apply_step(drawn, step, plan.brush_widths)
+    source = prepare_source(shapes(), plan.width, plan.height, plan.palette[plan.background])
+    wanted = quantize(source, Palette(plan.palette)).indices
+    painted = sum(1 for want in wanted if want != plan.background)
+    missed = sum(
+        1
+        for want, got in zip(wanted, drawn.indices, strict=True)
+        if want != plan.background and got == plan.background
+    )
+    assert missed / painted < 0.02
 
 
 def test_a_generous_budget_sacrifices_nothing() -> None:
@@ -268,6 +333,59 @@ def test_turning_fills_off_leaves_only_strokes() -> None:
     )
     assert plan.fills == ()
     assert plan.strokes
+
+
+def picker_profile() -> Profile:
+    return replace(
+        make_profile(),
+        picker=ColorPicker(
+            open=Control(x=10, y=900),
+            red=Control(x=10, y=940),
+            green=Control(x=40, y=940),
+            blue=Control(x=70, y=940),
+            preview=Control(x=10, y=900),
+        ),
+    )
+
+
+def test_a_colour_off_the_palette_needs_a_picker() -> None:
+    with pytest.raises(ValueError, match="no colour picker"):
+        select_color(make_profile(), PACING, (1, 2, 3))
+
+
+def test_a_colour_off_the_palette_is_typed_when_there_is_one() -> None:
+    actions = select_color(picker_profile(), PACING, (1, 2, 3))
+    typed = [action.text for action in actions if action.kind is ActionKind.TYPE]
+    assert typed == ["1", "2", "3"]
+
+
+def test_a_swatch_is_clicked_even_when_a_picker_exists() -> None:
+    # Clicking a swatch is one trip; typing a colour is four clicks and three
+    # numbers. A colour that is already on offer is not worth typing.
+    actions = select_color(picker_profile(), PACING, COLORS[2])
+    assert not [action for action in actions if action.kind is ActionKind.TYPE]
+
+
+def test_typing_and_chords_are_charged_for() -> None:
+    typing = [Action.type_text("255"), Action.chord(1, 2)]
+    assert schedule_seconds(typing, COST) == pytest.approx(4 * COST.seconds_per_move)
+
+
+def test_a_picker_frees_the_planner_from_the_swatches() -> None:
+    profile = picker_profile()
+    plan, _ = build_plan(
+        request(600.0, profile=profile, use_picker=True, colors=8),
+        initial_settings(request(600.0, profile=profile, use_picker=True, colors=8)),
+    )
+    # The plan speaks the picture's colours, which are not the profile's.
+    assert plan.palette != COLORS
+    assert len(plan.palette) <= 8
+
+
+def test_without_a_bound_picker_the_swatches_are_all_there_is() -> None:
+    settings = initial_settings(request(600.0, use_picker=True))
+    plan, _ = build_plan(request(600.0, use_picker=True), settings)
+    assert plan.palette == COLORS
 
 
 def test_dithering_costs_more_time_than_it_saves() -> None:

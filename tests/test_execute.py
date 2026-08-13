@@ -14,7 +14,7 @@ import pytest
 from penplan.budget import PlanRequest, plan_within_budget, schedule, schedule_seconds
 from penplan.input_win import AbortHotkey, Executor
 from penplan.model import Action, ActionKind, Point, Stroke
-from test_budget import COST, PACING, make_profile, shapes
+from test_budget import COST, PACING, make_plan, make_profile, shapes
 
 if TYPE_CHECKING:
     from penplan.model import Step
@@ -79,7 +79,7 @@ def two_strokes() -> list[Step]:
 
 
 def test_the_executor_performs_every_action_in_order() -> None:
-    actions = schedule(two_strokes(), (32, 32), make_profile(), PACING)
+    actions = schedule(make_plan(two_strokes()), make_profile(), PACING)
     pointer = FakePointer()
     clock = FakeClock()
     result = Executor(pointer, quiet_hotkey(), clock.sleep, clock.time).run(actions)
@@ -94,7 +94,7 @@ def test_the_executor_performs_every_action_in_order() -> None:
 
 
 def test_the_simulated_run_takes_as_long_as_the_estimate() -> None:
-    actions = schedule(two_strokes(), (32, 32), make_profile(), PACING)
+    actions = schedule(make_plan(two_strokes()), make_profile(), PACING)
     clock = FakeClock()
     Executor(FakePointer(), quiet_hotkey(), clock.sleep, clock.time).run(actions)
     # The fake clock only advances on waits, so what it accumulated is the
@@ -107,7 +107,7 @@ def test_the_simulated_run_takes_as_long_as_the_estimate() -> None:
 
 @pytest.mark.parametrize("stop_after", [1, 5, 17])
 def test_an_abort_stops_within_one_action(stop_after: int) -> None:
-    actions = schedule(two_strokes(), (32, 32), make_profile(), PACING)
+    actions = schedule(make_plan(two_strokes()), make_profile(), PACING)
     hotkey = quiet_hotkey()
     pointer = FakePointer()
     clock = FakeClock()
@@ -123,7 +123,7 @@ def test_an_abort_stops_within_one_action(stop_after: int) -> None:
 
 
 def test_an_abort_mid_stroke_releases_the_button() -> None:
-    actions = schedule(two_strokes(), (32, 32), make_profile(), PACING)
+    actions = schedule(make_plan(two_strokes()), make_profile(), PACING)
     first_press = next(
         index for index, action in enumerate(actions) if action.kind is ActionKind.PRESS
     )
@@ -149,7 +149,7 @@ def test_an_abort_before_the_first_action_draws_nothing() -> None:
     hotkey.trigger()
     pointer = FakePointer()
     clock = FakeClock()
-    actions = schedule(two_strokes(), (32, 32), make_profile(), PACING)
+    actions = schedule(make_plan(two_strokes()), make_profile(), PACING)
     result = Executor(pointer, hotkey, clock.sleep, clock.time).run(actions)
     assert result.aborted
     assert result.actions_done == 0
@@ -186,7 +186,7 @@ def test_a_plan_is_never_longer_than_its_estimate_says(budget: float) -> None:
             tour_seconds=0.2,
         )
     )
-    actions = schedule(plan.steps, (plan.width, plan.height), profile, profile.pacing)
+    actions = schedule(plan, profile, profile.pacing)
     simulated = schedule_seconds(actions, profile.cost)
     assert simulated == pytest.approx(plan.report.estimated_seconds, rel=HONESTY_MARGIN)
     if plan.report.fits_budget:

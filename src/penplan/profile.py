@@ -86,6 +86,27 @@ class BrushControl:
 
 
 @dataclass(frozen=True, slots=True)
+class ColorPicker:
+    """Where to type a colour that the palette does not contain.
+
+    Some canvases let a colour be entered as three numbers. That is the one
+    part of a colour picker worth automating: a gradient has to be aimed at and
+    checked, three numbers are exact. With this the planner is no longer limited
+    to the swatches on offer, which is the difference between a photograph
+    rendered in eighteen crayons and one rendered in its own colours.
+
+    ``preview`` is where the chosen colour shows on screen, and it is what
+    calibration reads back to prove the binding works.
+    """
+
+    open: Control
+    red: Control
+    green: Control
+    blue: Control
+    preview: Control
+
+
+@dataclass(frozen=True, slots=True)
 class Profile:
     """One calibrated canvas.
 
@@ -106,6 +127,7 @@ class Profile:
     cost: CostModel
     pacing: Pacing
     created: str
+    picker: ColorPicker | None = None
 
     def __post_init__(self) -> None:
         """Reject a profile the planner could not use."""
@@ -133,11 +155,22 @@ class Profile:
             raise ProfileError(msg)
         # A control inside the canvas is not a control, it is a mis-calibration:
         # clicking it would draw on the picture instead of selecting anything.
+        picker_controls = (
+            ()
+            if self.picker is None
+            else (
+                (self.picker.open.x, self.picker.open.y, "colour picker"),
+                (self.picker.red.x, self.picker.red.y, "red field"),
+                (self.picker.green.x, self.picker.green.y, "green field"),
+                (self.picker.blue.x, self.picker.blue.y, "blue field"),
+            )
+        )
         for x, y, name in (
             (self.brush_tool.x, self.brush_tool.y, "brush tool"),
             (self.fill_tool.x, self.fill_tool.y, "fill tool"),
             *((brush.x, brush.y, "brush size control") for brush in self.brushes),
             *((swatch.x, swatch.y, "palette swatch") for swatch in self.palette),
+            *picker_controls,
         ):
             if self.canvas.contains(x, y):
                 msg = f"the {name} at {x},{y} is inside the canvas, which cannot be right"
@@ -209,6 +242,15 @@ class Profile:
                 )
                 for brush in self.brushes
             ),
+            picker=None
+            if self.picker is None
+            else ColorPicker(
+                open=_scale_control(self.picker.open, factor),
+                red=_scale_control(self.picker.red, factor),
+                green=_scale_control(self.picker.green, factor),
+                blue=_scale_control(self.picker.blue, factor),
+                preview=_scale_control(self.picker.preview, factor),
+            ),
             dpi_scale=dpi_scale,
         )
 
@@ -234,6 +276,18 @@ class Profile:
                 {"x": brush.x, "y": brush.y, "width": brush.width, "measured": brush.measured}
                 for brush in self.brushes
             ],
+            "picker": None
+            if self.picker is None
+            else {
+                name: {"x": control.x, "y": control.y}
+                for name, control in (
+                    ("open", self.picker.open),
+                    ("red", self.picker.red),
+                    ("green", self.picker.green),
+                    ("blue", self.picker.blue),
+                    ("preview", self.picker.preview),
+                )
+            },
             "cost": {
                 "seconds_per_move": self.cost.seconds_per_move,
                 "seconds_per_pixel": self.cost.seconds_per_pixel,
@@ -365,10 +419,25 @@ def from_json_dict(data: dict[str, Any]) -> Profile:
                 hold_seconds=float(pacing["hold_seconds"]),
             ),
             created=str(data.get("created", "")),
+            picker=_picker_from_json(data.get("picker")),
         )
     except (KeyError, TypeError) as error:
         msg = f"profile is missing or has a malformed field: {error}"
         raise ProfileError(msg) from error
+
+
+def _picker_from_json(data: Any) -> ColorPicker | None:  # noqa: ANN401
+    if not data:
+        return None
+    try:
+        controls = {
+            name: Control(x=int(data[name]["x"]), y=int(data[name]["y"]))
+            for name in ("open", "red", "green", "blue", "preview")
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        msg = f"the colour picker is malformed: {error}"
+        raise ProfileError(msg) from error
+    return ColorPicker(**controls)
 
 
 def load(path: Path) -> Profile:

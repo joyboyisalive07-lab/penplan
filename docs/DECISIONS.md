@@ -310,6 +310,32 @@ canvas rectangle is rejected at load time, because clicking it would draw on
 the picture instead of selecting anything, and no real calibration can produce
 one.
 
+## A bound colour picker is tested before it is saved
+
+Typing a colour is four clicks, three selections and three numbers, and every
+one of them is a coordinate that could be off by a row. A picker bound to the
+wrong boxes does not fail: it types the red value into the hue field and draws
+the picture in whatever came out. So the wizard finishes by typing one colour
+that is nothing like the canvas default, reading the preview back off the
+screen, and refusing to save a binding whose preview did not change to it.
+
+The picker has to be open while it is bound, because its boxes do not exist
+while it is closed, and closed before drawing, because the panel covers the
+canvas. Both are told to the user rather than detected: detecting them would
+mean recognising one site's panel, and there is nothing site-specific here.
+
+## Brush widths are converted into plan pixels
+
+The profile measures a brush in screen pixels, because that is what the
+calibration saw. The plan is a small raster stretched over the canvas. Handing
+the screen numbers straight to the coverage pass made it believe a two-pixel
+brush covered two plan pixels, when a two-hundred-wide plan over a canvas of
+eight hundred gives it half of one. The strokes it planned were four times too
+far apart, and every drawing came out as hatching with the paper showing
+through. The conversion lives at the one place the two units meet, next to
+`raster_size`, and the plan carries the converted widths so the dry run renders
+what the canvas will actually receive.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated
