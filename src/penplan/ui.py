@@ -564,6 +564,10 @@ class App:
         self.colors_label = tk.Label(parent, text="", bg=PANEL, fg=MUTED, font=SMALL, anchor="w")
 
         self.button = PrimaryButton(parent, text="Draw", command=self._start)
+        # The readouts are packed first on purpose. The packer serves widgets in
+        # the order they were packed, and a long sacrifice list would otherwise
+        # take the space the numbers need and push them off the panel.
+        self._build_readouts()
         tk.Label(
             parent,
             textvariable=self.status,
@@ -591,8 +595,6 @@ class App:
         )
         self.calibrate_button.pack(side="bottom", fill="x", padx=PAD, pady=(0, PAD))
 
-        self._build_readouts()
-
     def _label(self, text: str) -> None:
         tk.Label(self.controls, text=text, bg=PANEL, fg=MUTED, font=SMALL, anchor="w").pack(
             fill="x", padx=PAD, pady=(PAD, 0)
@@ -606,8 +608,8 @@ class App:
             self.colors_label.pack_forget()
             return
         self.colors_label.configure(text=f"COLOURS  {self._color_count()}")
-        self.colors_label.pack(fill="x", padx=PAD, pady=(PAD, 0), before=self.button)
-        self.colors.pack(fill="x", padx=PAD, pady=(2, 0), before=self.button)
+        self.colors_label.pack(fill="x", padx=PAD, pady=(PAD, 0), before=self.readout_top)
+        self.colors.pack(fill="x", padx=PAD, pady=(2, 0), before=self.readout_top)
 
     def _color_count(self) -> int:
         return MIN_CHOSEN_COLORS + round(
@@ -631,7 +633,8 @@ class App:
         quietly cut off by the bottom of the panel.
         """
         parent = self.controls
-        tk.Frame(parent, bg=EDGE, height=1).pack(fill="x", padx=PAD, pady=(PAD, 0))
+        self.readout_top = tk.Frame(parent, bg=EDGE, height=1)
+        self.readout_top.pack(fill="x", padx=PAD, pady=(PAD, 0))
         headline = tk.Frame(parent, bg=PANEL)
         headline.pack(fill="x", padx=PAD, pady=(PAD, 0))
         tk.Label(headline, text="ESTIMATED", bg=PANEL, fg=MUTED, font=SMALL).pack(
