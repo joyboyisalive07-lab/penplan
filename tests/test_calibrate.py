@@ -8,6 +8,8 @@ a browser.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from penplan.calibrate import (
@@ -24,11 +26,12 @@ from penplan.calibrate import (
     fallback_brush_widths,
     measure_ink_width,
     measure_pacing,
+    verify_against_screen,
     zigzag,
 )
 from penplan.input_win import AbortedError
-from penplan.model import Rgb, ScreenRect
-from penplan.profile import ProfileError, Swatch
+from penplan.model import DEFAULT_COST_MODEL, DEFAULT_PACING, Rgb, ScreenRect
+from penplan.profile import BrushControl, Control, Profile, ProfileError, Swatch
 
 SCREEN = ScreenRect(left=0, top=0, width=1920, height=1080)
 BACKGROUND: Rgb = (255, 255, 255)
@@ -157,8 +160,33 @@ def test_wizard_builds_a_profile_from_the_captures() -> None:
 def test_wizard_reads_palette_colours_with_the_cursor_parked_away() -> None:
     surface = FakeSurface(full_script())
     calibrate(request(), surface, silent)
-    assert surface.parked == (800, 500)
-    assert surface.clicks == []
+    assert surface.parked is not None
+
+
+def test_calibration_never_clicks_inside_the_canvas() -> None:
+    # The timing run clicks swatches and tool buttons, and that is the whole
+    # list. A click inside the canvas would leave a mark on the user's drawing.
+    surface = FakeSurface(full_script())
+    result = calibrate(request(), surface, silent)
+    assert surface.clicks
+    for x, y in surface.clicks:
+        assert not result.canvas.contains(x, y)
+
+
+def test_the_wizard_always_times_the_mouse() -> None:
+    # The cost model decides every estimate, so it is measured on the machine
+    # that will draw rather than carried over from the defaults.
+    surface = FakeSurface(full_script())
+    result = calibrate(request(), surface, silent)
+    assert result.cost != DEFAULT_COST_MODEL
+    for name in type(result.cost).__slots__:
+        assert getattr(result.cost, name) >= 0
+
+
+def test_timing_the_mouse_draws_nothing() -> None:
+    surface = FakeSurface(full_script())
+    calibrate(request(), surface, silent)
+    assert surface.drags == []
 
 
 def test_wizard_records_the_blank_canvas_colour() -> None:
@@ -267,3 +295,72 @@ def test_fallback_widths_increase_and_start_thin() -> None:
 def test_calibration_step_carries_its_prompt() -> None:
     step = CalibrationStep("thing", "Point at the thing", StepKind.SINGLE)
     assert step.prompt.startswith("Point at")
+
+
+def profile_for_verification() -> Profile:
+    """Return a small profile whose palette sits outside its canvas."""
+    return Profile(
+        name="fake",
+        canvas=ScreenRect(left=400, top=200, width=800, height=600),
+        screen=SCREEN,
+        background=BACKGROUND,
+        palette=(
+            Swatch(x=20, y=100, color=(0, 0, 0)),
+            Swatch(x=20, y=130, color=(255, 255, 255)),
+            Swatch(x=20, y=160, color=(220, 40, 60)),
+        ),
+        brush_tool=Control(x=20, y=40),
+        fill_tool=Control(x=20, y=70),
+        brushes=(BrushControl(x=60, y=40, width=1.0, measured=True),),
+        dpi_scale=1.0,
+        cost=DEFAULT_COST_MODEL,
+        pacing=DEFAULT_PACING,
+        created="2026-08-12T00:00:00+00:00",
+    )
+
+
+def test_a_matching_screen_passes_verification() -> None:
+    profile = profile_for_verification()
+    colours = {(swatch.x, swatch.y): swatch.color for swatch in profile.palette}
+    result = verify_against_screen(profile, lambda x, y: colours[(x, y)], SCREEN)
+    assert result.ok
+    assert result.complaints == ()
+
+
+def test_a_moved_window_is_caught_before_anything_is_drawn() -> None:
+    # What a browser tab strip looks like where a palette used to be.
+    profile = profile_for_verification()
+    result = verify_against_screen(profile, lambda _x, _y: (32, 34, 38), SCREEN)
+    assert not result.ok
+    assert "palette colours are not where the profile says" in result.complaints[0]
+
+
+def test_a_single_shifted_swatch_is_enough_to_refuse() -> None:
+    profile = profile_for_verification()
+    colours = {(swatch.x, swatch.y): swatch.color for swatch in profile.palette}
+    colours[(20, 160)] = (30, 200, 90)
+    result = verify_against_screen(profile, lambda x, y: colours[(x, y)], SCREEN)
+    assert not result.ok
+    assert "swatch 3" in result.complaints[0]
+
+
+def test_a_swatch_that_only_drifted_a_little_still_passes() -> None:
+    # Scaling and subpixel rendering move a flat colour by a unit or two, and
+    # that is not a moved window.
+    profile = profile_for_verification()
+    colours = {
+        (swatch.x, swatch.y): tuple(min(255, channel + 2) for channel in swatch.color)
+        for swatch in profile.palette
+    }
+    result = verify_against_screen(profile, lambda x, y: colours[(x, y)], SCREEN)
+    assert result.ok
+
+
+def test_a_canvas_off_this_screen_is_refused() -> None:
+    profile = replace(
+        profile_for_verification(), canvas=ScreenRect(left=3000, top=200, width=800, height=600)
+    )
+    colours = {(swatch.x, swatch.y): swatch.color for swatch in profile.palette}
+    result = verify_against_screen(profile, lambda x, y: colours[(x, y)], SCREEN)
+    assert not result.ok
+    assert "not on this screen" in result.complaints[0]

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Final
 from PIL import Image
 
 from penplan.budget import PlanRequest, plan_within_budget, schedule
+from penplan.calibrate import verify_against_screen
 from penplan.input_win import (
     AbortHotkey,
     ExecutionResult,
@@ -33,6 +34,7 @@ from penplan.input_win import (
     HotkeyUnavailableError,
     InputError,
     Pointer,
+    ScreenPixels,
     accept_dropped_files,
     dpi_scale_at,
     enable_dpi_awareness,
@@ -295,6 +297,7 @@ class App:
         self.pending: str | None = None
         self.planning = False
         self.drawing = False
+        self.overridden = False
 
         root.title("penplan")
         root.configure(bg=BACKGROUND)
@@ -542,6 +545,7 @@ class App:
     def _planned(self, plan: DrawPlan, preview: Image.Image) -> None:
         self.planning = False
         self.plan = plan
+        self.overridden = False
         report = plan.report
         self.preview_pane.show(preview)
         self.fields.duration.set(f"{report.estimated_seconds:6.1f} s")
@@ -566,9 +570,37 @@ class App:
     def _start(self) -> None:
         if self.plan is None or self.drawing:
             return
+        if not self.overridden and not self._profile_still_fits():
+            return
         self.drawing = True
         self.button.configure_state(enabled=False, text="Drawing")
         self._countdown(COUNTDOWN_SECONDS)
+
+    def _profile_still_fits(self) -> bool:
+        """Refuse to draw when the screen no longer looks like the profile.
+
+        A profile is a set of coordinates, and they mean nothing once the
+        window they came from has moved. Without this check a stale profile
+        does not fail, it clicks: on tabs, on menus, on whatever sits where the
+        palette used to be. So the palette is read back off the screen and
+        compared before any of it is trusted.
+        """
+        profile = self.profiles[self.profile_name.get()]
+        try:
+            with ScreenPixels() as pixels:
+                result = verify_against_screen(profile, pixels.at, virtual_screen())
+        except InputError as error:
+            self.status.set(f"Could not read the screen: {error}")
+            return False
+        if result.ok:
+            return True
+        self.overridden = True
+        self.status.set(
+            f"{result.complaints[0]}. Recalibrate, or move the window back. "
+            "Press again to draw anyway."
+        )
+        self.button.configure_state(enabled=True, text="Draw anyway")
+        return False
 
     def _countdown(self, left: int) -> None:
         if not self.drawing:

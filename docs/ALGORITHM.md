@@ -1,8 +1,8 @@
 # Algorithm
 
 The planner turns a raster image into an ordered list of mouse actions that
-fits a time budget. It runs as a pipeline, and every stage below is filled in
-as it is built.
+fits a time budget. It runs as a pipeline, and each stage below is one of its
+steps, with the measurements that decided how it works.
 
 ```
 image -> quantize -> regions -> fills -> strokes -> tour -> budget -> plan
@@ -402,6 +402,15 @@ delay is stored in the profile.
 The measurement runs during calibration rather than during a drawing, because
 the test has to be drawn somewhere, and calibration is already the step that
 warns the canvas will need clearing.
+
+### Checking the profile first
+
+A plan is coordinates, and coordinates are only meaningful while the window
+they were calibrated from is where it was. Before the countdown, every palette
+swatch is read off the screen and compared with the colour the profile
+recorded, perceptually, with a tolerance of five CIEDE2000 units: enough for
+scaling and subpixel rendering, nowhere near enough to accept a browser tab.
+Anything that does not match is named, and the drawing does not start.
 
 ### Abort
 

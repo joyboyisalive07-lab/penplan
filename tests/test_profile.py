@@ -123,6 +123,20 @@ def test_unordered_brush_widths_are_refused() -> None:
         )
 
 
+def test_a_control_inside_the_canvas_is_refused() -> None:
+    # What a calibration looks like when the canvas corners were captured
+    # around the palette as well: every click on that swatch would draw.
+    with pytest.raises(ProfileError, match="inside the canvas"):
+        make_profile(
+            palette=(Swatch(x=150, y=250, color=(0, 0, 0)),),
+        )
+
+
+def test_a_tool_inside_the_canvas_is_refused() -> None:
+    with pytest.raises(ProfileError, match="brush tool at 150,250 is inside the canvas"):
+        make_profile(brush_tool=Control(x=150, y=250))
+
+
 def test_zero_brush_width_is_refused() -> None:
     with pytest.raises(ProfileError, match="width must be positive"):
         BrushControl(x=1, y=1, width=0.0, measured=False)

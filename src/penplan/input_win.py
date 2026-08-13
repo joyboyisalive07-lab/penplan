@@ -290,12 +290,6 @@ class ScreenPixels:
         return (value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF)
 
 
-def get_pixel(x: int, y: int) -> Rgb:
-    """Return the colour of one physical screen pixel."""
-    with ScreenPixels() as pixels:
-        return pixels.at(x, y)
-
-
 def normalize_absolute(x: int, y: int, screen: ScreenRect) -> tuple[int, int]:
     """Map a physical screen pixel onto SendInput's absolute coordinate space."""
     dx = round((x - screen.left + _PIXEL_CENTRE) * _ABSOLUTE_RANGE / screen.width)

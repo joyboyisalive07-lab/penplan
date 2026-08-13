@@ -131,6 +131,17 @@ class Profile:
         if self.dpi_scale <= 0:
             msg = f"dpi scale must be positive, got {self.dpi_scale}"
             raise ProfileError(msg)
+        # A control inside the canvas is not a control, it is a mis-calibration:
+        # clicking it would draw on the picture instead of selecting anything.
+        for x, y, name in (
+            (self.brush_tool.x, self.brush_tool.y, "brush tool"),
+            (self.fill_tool.x, self.fill_tool.y, "fill tool"),
+            *((brush.x, brush.y, "brush size control") for brush in self.brushes),
+            *((swatch.x, swatch.y, "palette swatch") for swatch in self.palette),
+        ):
+            if self.canvas.contains(x, y):
+                msg = f"the {name} at {x},{y} is inside the canvas, which cannot be right"
+                raise ProfileError(msg)
 
     @property
     def colors(self) -> tuple[Rgb, ...]:

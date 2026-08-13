@@ -287,6 +287,29 @@ The mark is a rounded frame with a route across it. The first version was a
 symmetric zigzag, which at sixteen pixels reads as the letter N; a path that
 turns reads as a path.
 
+## A profile is checked against the screen before anything is drawn
+
+This one was learned the hard way. A profile is a set of coordinates, and
+coordinates mean nothing once the window they came from has moved. Without a
+check, a stale or wrong profile does not fail: it clicks. On tabs, on menus, on
+the button that submits the drawing. That is exactly what happened with a test
+profile whose "palette" sat where a browser tab strip is.
+
+So before a single event is sent, every palette swatch is read back off the
+screen and compared perceptually with the colour the profile recorded. If a
+dozen swatches are the right colours in the right places, the window has not
+moved; if any of them is not, the tool names it and refuses. The user can
+override with a second press, because a false positive must not lock anyone
+out, but the default is to stop.
+
+The canvas is deliberately not part of the check. It is allowed to have a
+drawing on it already, which is what makes it a canvas.
+
+The structural half of the same lesson lives in `Profile`: a control inside the
+canvas rectangle is rejected at load time, because clicking it would draw on
+the picture instead of selecting anything, and no real calibration can produce
+one.
+
 ## Ruff runs `select = ["ALL"]`
 
 Starting from everything and subtracting is auditable; starting from a curated

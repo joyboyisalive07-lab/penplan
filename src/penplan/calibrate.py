@@ -36,6 +36,7 @@ from penplan.input_win import (
     virtual_screen,
 )
 from penplan.model import DEFAULT_COST_MODEL, DEFAULT_PACING, CostModel, Pacing, Rgb, ScreenRect
+from penplan.palette import color_difference
 from penplan.profile import (
     MIN_CANVAS_SIDE,
     BrushControl,
@@ -93,6 +94,11 @@ _COST_SHORT_HOP: Final = 8
 _COST_SAMPLE_INSET: Final = 4
 # A measured cost of zero would let the planner believe a drawing is free.
 _MIN_COST_SECONDS: Final = 1e-5
+
+# A swatch is a flat colour, so anything past a difference this size is not
+# the same swatch. One unit is roughly the smallest difference an eye catches,
+# so five allows for rendering and scaling and still rejects a browser tab.
+MAX_SWATCH_DRIFT: Final = 5.0
 
 PACING_LADDER: Final = (0.004, 0.008, 0.016, 0.032, 0.064)
 """Delays between stroke points to try, fastest first."""
@@ -315,6 +321,72 @@ def measure_brush_widths(
     return tuple(widths)
 
 
+@dataclass(frozen=True, slots=True)
+class Verification:
+    """Whether a profile still describes what is on the screen right now."""
+
+    ok: bool
+    complaints: tuple[str, ...]
+
+
+def verify_against_screen(
+    profile: Profile,
+    read_pixel: Callable[[int, int], Rgb],
+    screen: ScreenRect,
+) -> Verification:
+    """Check a profile against the live screen before a single event is sent.
+
+    A profile is a set of coordinates, and coordinates are only meaningful
+    while the window they were taken from is where it was. If the browser has
+    moved, or the profile came from another machine, or the file was never a
+    real calibration, then every click lands on whatever happens to be there
+    instead: a tab, a menu, the button that submits the drawing.
+
+    The check is the same one calibration is built on. Every palette swatch has
+    a colour recorded from the screen, so reading those pixels again and
+    comparing perceptually says whether the palette is still under the profile.
+    Nothing else needs to be trusted: if a dozen swatches are all the right
+    colours in the right places, the window has not moved.
+
+    The canvas is deliberately not checked. It is allowed to have a drawing on
+    it already, which is exactly what makes it a canvas.
+    """
+    complaints: list[str] = []
+    if not (
+        screen.contains(profile.canvas.left, profile.canvas.top)
+        and screen.contains(profile.canvas.right - 1, profile.canvas.bottom - 1)
+    ):
+        complaints.append(
+            f"the canvas at {profile.canvas.left},{profile.canvas.top} "
+            f"{profile.canvas.width}x{profile.canvas.height} is not on this screen"
+        )
+    for control, name in (
+        (profile.brush_tool, "brush tool"),
+        (profile.fill_tool, "fill tool"),
+        *((brush, "brush size") for brush in profile.brushes),
+        *((swatch, "palette swatch") for swatch in profile.palette),
+    ):
+        if not screen.contains(control.x, control.y):
+            complaints.append(f"the {name} at {control.x},{control.y} is not on this screen")
+            break
+
+    wrong = [
+        (index, swatch)
+        for index, swatch in enumerate(profile.palette)
+        if screen.contains(swatch.x, swatch.y)
+        and color_difference(read_pixel(swatch.x, swatch.y), swatch.color) > MAX_SWATCH_DRIFT
+    ]
+    if wrong:
+        index, swatch = wrong[0]
+        found = read_pixel(swatch.x, swatch.y)
+        complaints.append(
+            f"{len(wrong)} of {len(profile.palette)} palette colours are not where the profile "
+            f"says: swatch {index + 1} at {swatch.x},{swatch.y} should be {swatch.color} "
+            f"and reads {found}"
+        )
+    return Verification(ok=not complaints, complaints=tuple(complaints))
+
+
 def zigzag(left: int, top: int) -> list[tuple[int, int]]:
     """Return the corners of a test zigzag, sharp enough that a miss shows."""
     return [
@@ -480,7 +552,7 @@ def calibrate(
         BrushControl(x=x, y=y, width=width, measured=measured)
         for (x, y), width in sorted(zip(controls, widths, strict=True), key=lambda pair: pair[1])
     )
-    return Profile(
+    profile = Profile(
         name=request.name,
         canvas=canvas,
         screen=request.screen,
@@ -494,6 +566,11 @@ def calibrate(
         pacing=pacing,
         created=timestamp(),
     )
+    # Always measured, never guessed: an estimate built on the defaults would be
+    # arithmetic about somebody else's machine. This clicks swatches and tool
+    # buttons, which changes the selection and draws nothing.
+    announce("Timing the mouse")
+    return replace(profile, cost=measure_costs(surface, profile))
 
 
 class WindowsSurface:
