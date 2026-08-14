@@ -108,6 +108,9 @@ class PlanRequest:
     colors: int = 12
     """How many colours to choose from the image, when the picker is used."""
 
+    max_strokes: int | None = None
+    """The most separate strokes the canvas will record, if it has a limit."""
+
     tour_seconds: float = DEFAULT_TOUR_SECONDS
 
 
@@ -451,6 +454,13 @@ def build_plan(request: PlanRequest, settings: Settings) -> tuple[DrawPlan, floa
     return replace(plan, report=replace(plan.report, estimated_seconds=estimate)), estimate
 
 
+def _within_limits(plan: DrawPlan, estimate: float, request: PlanRequest) -> bool:
+    """Return whether the plan is inside both the time and the stroke budget."""
+    if estimate > request.budget_seconds:
+        return False
+    return request.max_strokes is None or len(plan.strokes) <= request.max_strokes
+
+
 def plan_within_budget(request: PlanRequest) -> DrawPlan:
     """Return the best plan that fits the budget, and what fitting it cost.
 
@@ -458,22 +468,40 @@ def plan_within_budget(request: PlanRequest) -> DrawPlan:
     drawing that fits comfortably is never degraded at all. A plan that still
     overruns after the last rung comes back with ``fits_budget`` false rather
     than quietly.
+
+    There are two ways to overrun. Time is the obvious one. The other is the
+    number of separate strokes, because a canvas that records the drawing for a
+    replay has a limit on how much it will keep, and past it the strokes still
+    appear on screen while no longer being saved. The drawing then looks right
+    to whoever drew it and stops halfway through for everybody else.
     """
     settings = initial_settings(request)
     sacrifices: list[Sacrifice] = []
     plan, estimate = build_plan(request, settings)
     for rung in LADDER:
-        if estimate <= request.budget_seconds:
+        if _within_limits(plan, estimate, request):
             break
         candidate = replace(settings, **{rung.field: rung.value})
         candidate_plan, candidate_estimate = build_plan(request, candidate)
-        if candidate_estimate >= estimate:
+        bought_time = candidate_estimate < estimate
+        bought_strokes = len(candidate_plan.strokes) < len(plan.strokes)
+        if not (bought_time or bought_strokes):
             # This rung bought nothing. Keeping it would mean reporting a
             # sacrifice the user paid for and did not get anything back for.
             continue
         saved = estimate - candidate_estimate
+        dropped = len(plan.strokes) - len(candidate_plan.strokes)
         settings, plan, estimate = candidate, candidate_plan, candidate_estimate
         sacrifices.append(
-            Sacrifice(kind=rung.kind, detail=f"{rung.detail}, saving {saved:.1f} seconds")
+            Sacrifice(kind=rung.kind, detail=f"{rung.detail}, {_bought(saved, dropped)}")
         )
     return replace(plan, report=replace(plan.report, sacrifices=tuple(sacrifices)))
+
+
+def _bought(saved: float, dropped: int) -> str:
+    """Say what a rung bought, in whichever budget it helped."""
+    if saved > 0 and dropped > 0:
+        return f"saving {saved:.1f} seconds and {dropped} strokes"
+    if dropped > 0:
+        return f"saving {dropped} strokes"
+    return f"saving {saved:.1f} seconds"

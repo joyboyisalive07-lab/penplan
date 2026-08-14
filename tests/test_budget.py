@@ -388,6 +388,35 @@ def test_without_a_bound_picker_the_swatches_are_all_there_is() -> None:
     assert plan.palette == COLORS
 
 
+def test_a_stroke_limit_degrades_the_plan_like_a_time_limit() -> None:
+    # A canvas that records the drawing for a replay keeps only so many strokes.
+    # Past that, the rest still appear on screen and are no longer saved, so the
+    # drawing looks right to whoever drew it and stops halfway for everybody else.
+    generous = plan_within_budget(request(600.0))
+    assert len(generous.strokes) > 40
+    capped = plan_within_budget(request(600.0, max_strokes=40))
+    assert len(capped.strokes) <= 40
+    assert capped.report.sacrifices
+
+
+def test_a_stroke_limit_that_is_already_met_costs_nothing() -> None:
+    plan = plan_within_budget(request(600.0, max_strokes=100_000))
+    assert plan.report.sacrifices == ()
+
+
+def test_a_rung_that_only_buys_strokes_is_still_reported() -> None:
+    plan = plan_within_budget(request(600.0, max_strokes=40))
+    assert any("strokes" in sacrifice.detail for sacrifice in plan.report.sacrifices)
+
+
+def test_an_impossible_stroke_limit_is_reported_not_hidden() -> None:
+    plan = plan_within_budget(request(600.0, max_strokes=1))
+    # It cannot get there, and says so by handing back what it managed rather
+    # than pretending the limit was met.
+    assert len(plan.strokes) > 1
+    assert plan.report.sacrifices
+
+
 def test_dithering_costs_more_time_than_it_saves() -> None:
     plain, plain_estimate = build_plan(request(600.0), initial_settings(request(600.0)))
     dithered_request = request(600.0, dither=True)

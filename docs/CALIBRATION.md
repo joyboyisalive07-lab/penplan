@@ -182,6 +182,22 @@ wrong and you can see that it is wrong.
 | The drawing is too coarse | Raise the detail slider, or give it more seconds. The sacrifice list says what the budget cut. |
 | Escape does nothing | Another application is holding the Escape hotkey. The tool refuses to start drawing in that case and says so. |
 
+## When the replay stops halfway
+
+Some canvases record the drawing so it can be replayed afterwards, and keep
+only so much of it. Past that limit the strokes still appear on your screen and
+are no longer being saved, so the picture looks finished to you and stops
+halfway through for everyone watching the replay.
+
+**Stroke limit**, beside the seconds, is for that. Leave it empty for no limit.
+Give it a number and the planner degrades until the plan fits, the same way it
+does for time, and says so when it cannot get there.
+
+Finding your canvas's number takes a few rounds: draw, watch the replay, and
+halve the limit until the replay finishes. Turning **Exact colours** off is the
+blunt version of the same lever, because typing colours breaks the drawing into
+several times as many separate strokes.
+
 ## Deleting a calibration
 
 **Delete**, beside the calibrate button, removes the selected profile after

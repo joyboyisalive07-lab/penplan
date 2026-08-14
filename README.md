@@ -191,6 +191,11 @@ finds more regions, and if the seconds do not move with it the ladder starts
 dropping them again. Raising the detail slider without raising the budget can
 make the result worse, and the sacrifice list under the numbers says so.
 
+**The replay stops halfway.** Some canvases keep only so many strokes for the
+replay they show afterwards. Past the limit the drawing still appears on your
+screen and is no longer being recorded. Put the number in **Stroke limit** and
+the planner degrades until it fits, the same way it does for time.
+
 Two smaller things: crop the image to the shape of the canvas first, or it gets
 letterboxed with bands of background down the sides, and remember that each
 colour in the profile is a trip to the palette, so a profile with twelve

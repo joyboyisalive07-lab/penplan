@@ -79,6 +79,7 @@ PREVIEW_SIDE: Final = 380
 # Wide enough for the word and no wider: the calibrate button beside it is the
 # one people came for.
 DELETE_WIDTH: Final = 72
+NUMBER_BOX_CHARACTERS: Final = 6
 # Tall enough that every number and the button fit without scrolling, and
 # small enough to sit beside a browser rather than on top of it.
 WINDOW_WIDTH: Final = 1180
@@ -590,19 +591,12 @@ class App:
         self.image_label.pack(fill="x", padx=PAD, pady=(4, 0))
         self.image_label.bind("<Button-1>", lambda _event: self._choose_image())
 
-        self._label("SECONDS AVAILABLE")
-        self.budget = tk.Entry(
-            parent,
-            bg=BACKGROUND,
-            fg=TEXT,
-            insertbackground=ACCENT,
-            font=NUMBER,
-            relief="flat",
-            justify="left",
-        )
-        self.budget.insert(0, "90")
-        self.budget.bind("<KeyRelease>", lambda _event: self._schedule_replan())
-        self.budget.pack(fill="x", padx=PAD, pady=(4, 0), ipady=6)
+        numbers = tk.Frame(parent, bg=PANEL)
+        numbers.pack(fill="x", padx=PAD, pady=(PAD, 0))
+        numbers.grid_columnconfigure(0, weight=1, uniform="number")
+        numbers.grid_columnconfigure(1, weight=1, uniform="number")
+        self.budget = self._number(numbers, "SECONDS AVAILABLE", column=0, value="90")
+        self.max_strokes = self._number(numbers, "STROKE LIMIT", column=1, value="")
 
         self._label("DETAIL")
         self.detail = Slider(parent, value=0.6, on_change=self._schedule_replan)
@@ -653,6 +647,29 @@ class App:
         SecondaryButton(
             buttons, text="Delete", command=self._delete_profile, width=DELETE_WIDTH
         ).pack(side="left", padx=(6, 0))
+
+    def _number(self, parent: tk.Misc, label: str, *, column: int, value: str) -> tk.Entry:
+        """Build one labelled number box in a shared row."""
+        cell = tk.Frame(parent, bg=PANEL)
+        cell.grid(row=0, column=column, sticky="ew", padx=(0, 6) if column == 0 else (6, 0))
+        tk.Label(cell, text=label, bg=PANEL, fg=MUTED, font=SMALL, anchor="w").pack(fill="x")
+        entry = tk.Entry(
+            cell,
+            bg=BACKGROUND,
+            fg=TEXT,
+            insertbackground=ACCENT,
+            font=NUMBER,
+            relief="flat",
+            justify="left",
+            # In characters. Without it the stock default asks for twenty, and
+            # two boxes side by side push the whole control column wider than
+            # the window was laid out for.
+            width=NUMBER_BOX_CHARACTERS,
+        )
+        entry.insert(0, value)
+        entry.bind("<KeyRelease>", lambda _event: self._schedule_replan())
+        entry.pack(fill="x", pady=(4, 0), ipady=6)
+        return entry
 
     def _label(self, text: str) -> None:
         tk.Label(self.controls, text=text, bg=PANEL, fg=MUTED, font=SMALL, anchor="w").pack(
@@ -784,6 +801,7 @@ class App:
             use_fills=self.use_fills.value,
             use_picker=wants_picker,
             colors=self._color_count(),
+            max_strokes=_stroke_limit(self.max_strokes.get()),
         )
         threading.Thread(target=self._plan_worker, args=(request,), daemon=True).start()
 
@@ -817,15 +835,23 @@ class App:
         self.sacrifices.set(
             "\n".join(f"- {item.detail}" for item in report.sacrifices) if report.sacrifices else ""
         )
-        if report.fits_budget:
+        limit = _stroke_limit(self.max_strokes.get())
+        over_strokes = limit is not None and len(plan.strokes) > limit
+        if report.fits_budget and not over_strokes:
             self.status.set("Escape stops the drawing at any moment")
             self.button.configure_state(enabled=True, text="Draw")
+            return
+        if over_strokes:
+            self.status.set(
+                f"Over the stroke limit: {len(plan.strokes)} strokes against {limit}. "
+                "Lower the detail, or turn exact colours off."
+            )
         else:
             self.status.set(
                 f"Does not fit: {report.estimated_seconds:.0f} s of work in "
                 f"{report.budget_seconds:.0f} s. Draw anyway, or give it longer."
             )
-            self.button.configure_state(enabled=True, text="Draw anyway")
+        self.button.configure_state(enabled=True, text="Draw anyway")
 
     def _start(self) -> None:
         if self.plan is None or self.drawing:
@@ -1072,6 +1098,15 @@ def _seconds(text: str) -> float:
         return max(1.0, float(text.strip()))
     except ValueError:
         return 60.0
+
+
+def _stroke_limit(text: str) -> int | None:
+    """Read the stroke limit box, where empty and nonsense both mean no limit."""
+    try:
+        limit = int(text.strip())
+    except ValueError:
+        return None
+    return limit if limit > 0 else None
 
 
 def _load_profiles() -> tuple[dict[str, Profile], str]:
